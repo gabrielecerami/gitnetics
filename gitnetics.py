@@ -62,7 +62,7 @@ if __name__=="__main__":
     ## actions
 
     if args.command == 'download-untested-recombinations':
-        tester_vars = gitnetic.generate_tester_vars(args.download_dir, recomb_id=args.recomb_id)
+        tester_vars = gitnetic.download_untested_recombinations(args.download_dir, recomb_id=args.recomb_id)
         projects_info = tester_vars.pop('projects')
         dump(projects_info, args.var_file)
         for test_id in tester_vars:

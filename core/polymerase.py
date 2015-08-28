@@ -71,9 +71,9 @@ class Polymerase(object):
                     success = False
         return success
 
-    def download_untested_recombinations(self, base_dir, recomb_id=None):
+    def download_untested_recombinations(self, download_dir, recomb_id=None):
         tester_vars = dict()
-        tester_vars['projects'] = self.projects_conf
+        tester_vars['projects'] = { 'projects': self.projects_conf }
         for project_name in self.projects:
             project = self.projects[project_name]
             log.debugvar('recomb_id')
