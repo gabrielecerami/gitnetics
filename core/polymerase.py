@@ -33,7 +33,7 @@ class Polymerase(object):
             projects = new_projects
         if filter_branches:
             log.info("Filtering branches: %s" % filter_branches)
-            branches = args.watch_branches.split(',')
+            branches = filter_branches.split(',')
             for project_name in projects:
                 projects[project_name]['original']['watch-branches'] = branches
 

@@ -42,7 +42,6 @@ def parse_args(parser):
 
     args = parser.parse_args()
 
-    log.debugvar('args')
     return args
 
 
@@ -51,6 +50,7 @@ if __name__=="__main__":
 
     parser = argparse.ArgumentParser(description='Map the git out of upstream')
     args = parse_args(parser)
+    log.debugvar('args')
 
     projects = yaml.load(args.projects_path.read())
     try:
