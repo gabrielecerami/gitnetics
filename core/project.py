@@ -350,7 +350,8 @@ class Project(object):
         changes_infos = list()
         if dirlist:
             for test_dir in dirlist:
-                changes_infos.append({ 'project': self.project_name, 'test_dir': test_dir})
+                project_shortname = re.sub('puppet-','', self.project_name)
+                changes_infos.append({ 'project_name': self.project_name, 'project_shortname': project_shortname, 'recombination_dir': test_dir})
         else:
             log.info("Project '%s': no untested recombinations" % self.project_name)
         return changes_infos
