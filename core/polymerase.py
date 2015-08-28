@@ -72,20 +72,13 @@ class Polymerase(object):
         return success
 
     def download_untested_recombinations(self, base_dir, recomb_id=None):
-        success = True
-        download_dir = "%s/recombinations" % base_dir
+        tester_vars = dict()
+        tester_vars['projects'] = self.projects_conf
         for project_name in self.projects:
             project = self.projects[project_name]
             log.debugvar('recomb_id')
             changes_infos = project.download_untested_recombinations(download_dir, recomb_id=recomb_id)
-        return changes_infos
-
-    def generate_tester_vars(self, recomb_id=None):
-        tester_vars = dict()
-        tester_vars['projects'] = {"components_configuration": self.projects_conf}
-        # subdir_list = project_name/change_id
-        changes = self.download_untested_recombinations(self.base_dir, recomb_id=recomb_id)
-        for seq, test_infos in enumerate(changes):
+        for seq, test_infos in enumerate(changes_infos):
             test_id = 'test-%s' % seq
             tester_vars[test_id] = test_infos
         return tester_vars
@@ -107,12 +100,7 @@ class Polymerase(object):
             project = self.projects[project_name]
             project.delete_service_branches()
             log.info("delete stale branches")
-            # check branches (non-existing, dangling) WIP
-            # dangling:
-            ## get list of recomb-branches in gerrithub
             project.delete_stale_branches()
-            ## query open changes in gerrithub, gather list of recomb-branches
-            # delete every branch in (first list - second list)
             # non-existing:
             # for branch in watched branches
             # if branch-tag not it branches:
@@ -127,7 +115,6 @@ class Polymerase(object):
             #grep descr project.config
             #git diff project.config
             #git diff groups
-            #cp /home/gcerami/OPMCI/conf/project.config /home/gcerami/OPMCI/conf/groups .
+            #cp project.config conf/groups .
             #git commit -a -m "Changing Ownership"; git push origin HEAD:refs/meta/config ; cd .
-
             # update gerrit trigger configuration based on projects.yaml
