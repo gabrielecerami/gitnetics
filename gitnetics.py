@@ -2,6 +2,7 @@ import yaml
 import sys
 import re
 import argparse
+import os
 from core.colorlog import log
 from core.polymerase import Polymerase
 
@@ -32,11 +33,11 @@ def parse_args(parser):
     parser_new_original_change = subparsers.add_parser('poll-original')
     parser_new_original_change.add_argument('-b', '--original-branch', dest='original_branch', action='store',  help='upstream branch to consider')
 
-    parser_download_untested_recombinations = subparsers.add_parser('download-untested-recombinations')
-    parser_download_untested_recombinations.add_argument('-v','--var-file', dest='var_file', type=argparse.FileType('w'), required=True, help='path to the file to be generated')
-    parser_download_untested_recombinations.add_argument('-t','--tests-info-dir', dest='tests_info_dir', action='store', required=True, help='path to the file to be generated')
-    parser_download_untested_recombinations.add_argument('-r','--recombination-id', dest='recomb_id', action='store', help='change id to handle')
-    parser_download_untested_recombinations.add_argument('-w','--download-dir', dest='download_dir', action='store', help='change id to handle')
+    parser_fetch_untested_recombinations = subparsers.add_parser('fetch-untested-recombinations')
+    parser_fetch_untested_recombinations.add_argument('-v','--var-file', dest='var_file', type=argparse.FileType('w'), required=True, help='path to the file to be generated')
+    parser_fetch_untested_recombinations.add_argument('-t','--tests-info-dir', dest='tests_info_dir', action='store', required=True, help='path to the file to be generated')
+    parser_fetch_untested_recombinations.add_argument('-r','--recombination-id', dest='recomb_id', action='store', help='change id to handle')
+    parser_fetch_untested_recombinations.add_argument('-w','--fetch-dir', dest='fetch_dir', action='store', help='change id to handle')
 
     parser_cleanup = subparsers.add_parser('cleanup')
 
@@ -61,14 +62,18 @@ if __name__=="__main__":
 
     ## actions
 
-    if args.command == 'download-untested-recombinations':
-        tester_vars = gitnetic.download_untested_recombinations(args.download_dir, recomb_id=args.recomb_id)
-        projects_info = tester_vars.pop('projects')
+    if args.command == 'fetch-untested-recombinations':
+        tester_vars = gitnetic.fetch_untested_recombinations(args.fetch_dir, recomb_id=args.recomb_id)
+        projects_info = tester_vars.pop('projects_conf')
         dump(projects_info, args.var_file)
-        for test_id in tester_vars:
-            info_file_name = '%s/%s.yaml' % (args.tests_info_dir, test_id)
+        try:
+            os.makedirs(args.tests_info_dir)
+        except OSError:
+            pass
+        for change_number in tester_vars:
+            info_file_name = '%s/%s.yaml' % (args.tests_info_dir, change_number)
             with open(info_file_name, 'w') as change_file:
-                dump(tester_vars[test_id], change_file)
+                dump(tester_vars[change_number], change_file)
 
     elif args.command == 'poll-replica':
         gitnetic.poll_replica(patches_change_id=args.change_id)

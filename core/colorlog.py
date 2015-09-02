@@ -34,10 +34,10 @@ class ColorLogger(logging.Logger):
         super(ColorLogger, self).__init__(name, logging.DEBUG)
 
         logging.addLevelName(SUCCESS, 'SUCCESS')
-        ch = logging.StreamHandler()
+        console = logging.StreamHandler()
         formatter = ColorFormatter('%(message)s')
-        ch.setFormatter(formatter)
-        self.addHandler(ch)
+        console.setFormatter(formatter)
+        self.addHandler(console)
 
     def success(self, msg, *args, **kwargs):
         if self.isEnabledFor(SUCCESS):
@@ -54,11 +54,17 @@ class ColorLogger(logging.Logger):
 
 
 
-def get():
+def get_color_log():
     logging.setLoggerClass(ColorLogger)
     return logging.getLogger('log')
 
-log = get()
+def get_summary_log():
+    logging.setLoggerClass(ColorLogger)
+    return logging.getLogger('logsummary')
+
+
+log = get_color_log()
+logsummary = get_summary_log()
 
 log.info('--- ColorLog Color settings')
 log.info('--- info')

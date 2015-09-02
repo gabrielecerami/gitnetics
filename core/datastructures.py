@@ -1,12 +1,28 @@
 import sys
 import os
 import yaml
-import tempfile
+import re
 from colorlog import log
+
+
+class DecodeError(Exception):
+    pass
+
+class UploadError(Exception):
+    pass
+
+class SubmitError(Exception):
+    pass
+
+class PushMergeError(Exception):
+    pass
+
+class AttemptError(Exception):
+    pass
 
 class Change(object):
 
-    def __init__(self, repo=None, infos=None):
+    def __init__(self, remote=None, infos=None):
         if infos:
             self.revision = infos['revision']
             self.branch = infos['branch']
@@ -16,6 +32,8 @@ class Change(object):
                 self.uuid = infos['uuid']
             self.parent = infos['parent']
             self.previous_commit = infos['parent']
+            if 'number' in infos:
+                self.number = infos['number']
             if 'status' in infos:
                 self.status = infos['status']
             if 'subject' in infos:
@@ -23,175 +41,141 @@ class Change(object):
             self.project_name = infos['project-name']
             if 'topic' in infos:
                 self.topic = infos['topic']
-            if 'number' in infos:
-                self.number = infos['number']
-            if 'patchet_number' in infos:
-                self.patchset_number = infos['patchet_number']
+            if 'patchset_number' in infos:
+                self.patchset_number = infos['patchset_number']
             if 'patchset_revision' in infos:
                 self.patchset_revision = infos['patchset_revision']
         else:
             self.branch = None
             self.topic = None
-        self.merge_commit = None
 
-        self.repo = None
-        if repo:
-            self.repo = repo
-
-    def find_merge(self, merge_commits):
-        # TODO: implement better git-find-merge to find to which merge a commit belongs
-        # in gerrit is simple, merged branches are always formed by 1 commit
-        # in git things may be more difficult
-        # in git we must wait for ALL the commits in a merged branch before
-        # committing the merge commit
-        for merge_commit in merge_commits:
-            if self.revision in merge_commit['parents'][1]:
-                log.info("%s is part of merge commit %s" % (self.revision, merge_commit['commit']))
-                self.previous_commit = merge_commit['parents'][0]
-                self.merge_commit = merge_commit['commit']
-                break
+        self.remote = None
+        if remote:
+            self.remote = remote
 
     def submit(self):
-        return self.repo.submit_change(self.number, self.patchset_number)
+        return self.remote.submit_change(self.number, self.patchset_number)
 
     def approve(self):
-        return self.repo.approve_change(self.number, self.patchset_number)
+        return self.remote.approve_change(self.number, self.patchset_number)
 
     def upload(self):
-        result_change = self.repo.upload_change(self.branch, self.topic)
+        result_change = self.remote.upload_change(self.branch, self.topic)
         if result_change:
             self.number = result_change.number
             self.uuid = result_change.uuid
+            self.status = result_change.status
             log.info("Recombination with Change-Id %s uploaded in replica gerrit with number %s" % (self.uuid, self.number))
         else:
-            shell('git push replica :%s' % self.branch)
             return False
-
         return True
-
 
 
 class Recombination(Change):
 
-    def __init__(self, project, infos=None):
-        self.project = project
+    def __init__(self, underlayer, recomb_type, remote=None, replica_remote=None, original_remote=None, patches_remote=None, infos=None):
+        self.underlayer = underlayer
+        if original_remote:
+            self.original_remote = original_remote
+        if replica_remote:
+            self.replica_remote = replica_remote
+        if patches_remote:
+            self.patches_remote = patches_remote
         if infos:
-            super(Recombination, self).__init__(repo=self.project.replica, infos=infos)
-            self.decode_subject()
+            super(Recombination, self).__init__(remote=remote, infos=infos)
+            self.decode_subject(original_remote=original_remote, replica_remote=replica_remote, patches_remote=patches_remote)
         else:
-            super(Recombination, self).__init__(repo=self.project.replica)
+            super(Recombination, self).__init__(remote=remote)
+            self.recomb_type = recomb_type
             self.subject = None
             self.patches_queue = None
             self.own_merge_commit = None
             self.replica_revision = None
-            self.original = Change(repo=self.project.original)
-            self.patches = Change(repo=self.project.replica)
-            self.replica = Change(repo=self.project.replica)
+            if self.recomb_type == 'replica-mutation':
+                try:
+                    self.replica_change = Change(remote=replica_remote)
+                    self.mutation_change = Change(remote=patches_remote)
+                except NameError:
+                    raise MissingInfoError
+            elif self.recomb_type == 'original-diversity':
+                try:
+                    self.original_change = Change(remote=original_remote)
+                    self.diversity_change = Change(remote=patches_remote)
+                except NameError:
+                    raise MissingInfoError
 
-    def decode_subject(self):
+
+    def decode_subject(self, original_remote=None, replica_remote=None, patches_remote=None):
         log.debug(self.subject)
         try:
-            data = yaml.load(self.subject)
+            recomb_data = yaml.load(self.subject)
         except ValueError:
             log.error("Subject not in yaml")
-            exit(1)
-        recomb_data = data['recombination']
-        if 'mutation' in recomb_data:
-            self.patches = self.project.replica.get_changes_by_id([recomb_data['mutation']['id']])[recomb_data['mutation']['id']]
-            self.replica = self.project.underlayer.get_changes_by_id([recomb_data['replica']['id']], branch=recomb_data['replica']['branch'])[recomb_data['replica']['id']]
-            main_source = self.replica
-            merge_commits = self.project.underlayer.get_merge_commits(self.replica.parent, self.replica.revision)
-            self.replica.find_merge(merge_commits)
-        elif 'diversity' in recomb_data:
-            self.patches = self.project.underlayer.get_changes_by_id([recomb_data['diversity']['id']], branch=recomb_data['diversity']['branch'])[recomb_data['diversity']['id']]
-            self.original = self.project.original.get_changes_by_id([recomb_data['original']['id']], branch=recomb_data['original']['branch'])[recomb_data['original']['id']]
-            main_source = self.original
-            merge_commits = self.project.underlayer.get_merge_commits(self.original.parent, self.original.revision)
-            self.original.find_merge(merge_commits)
+            raise DecodeError
 
-        merge_revision = self.patches.revision
-        if main_source.merge_commit:
-            starting_revision = main_source.merge_commit
-        else:
-            starting_revision = main_source.revision
-        self.recombination_attempt = (data['target-branch'], starting_revision, merge_revision)
+        recomb_sources = recomb_data['sources']
+        header = recomb_data['Recombination']
 
-    def attempt(self, main_source_name, patches_source_name):
-        # patches_revision = self.project.get_revision(self.patches.revision)
-        if main_source_name == 'original' and patches_source_name == 'diversity':
-            main_source = self.original
-            patches_source = self.patches
-        elif main_source_name == 'replica' and patches_source_name == 'mutation':
-            main_source = self.replica
-            patches_source = self.patches
+        recomb_header = header.split('/')[0]
+        self.recomb_type = re.sub(':[a-zA-Z0-9]{6}', '',recomb_header)
+        if self.recomb_type == 'replica-mutation':
+            self.replica_change = self.underlayer.get_changes_by_id([recomb_sources['main']['id']], branch=recomb_sources['main']['branch'])[recomb_sources['main']['id']]
+            self.mutation_change = self.patches_remote.get_changes_by_id([recomb_sources['patches']['id']])[recomb_sources['patches']['id']]
+        elif self.recomb_type == 'original-diversity':
+            self.original_change = self.original_remote.get_changes_by_id([recomb_sources['main']['id']], branch=recomb_sources['main']['branch'])[recomb_sources['main']['id']]
+            # Set real commit as revision
+            self.original_change.revision = recomb_sources['main']['revision']
+            self.diversity_change = self.underlayer.get_changes_by_id([recomb_sources['patches']['id']], branch=recomb_sources['patches']['branch'])[recomb_sources['patches']['id']]
+
+        self.set_recomb_data()
+
+    def set_recomb_data(self):
+        if self.recomb_type == 'original-diversity':
+            main_source = self.original_change
+            patches_source = self.diversity_change
+            main_source_name = 'original'
+            patches_source_name = 'diversity'
+        elif self.recomb_type == 'replica-mutation':
+            main_source = self.replica_change
+            patches_source = self.mutation_change
+            main_source_name = 'replica'
+            patches_source_name = 'mutation'
         else:
-            log.critical("I don't know how to attempt this recombination")
-            sys.exit(1)
-        pick_revision = main_source.revision
-        pick_branch = main_source.branch
-        starting_revision = main_source.previous_commit
-        merge_revision = patches_source.revision
-        merge_branch = patches_source.branch
-        recombination_branch = self.branch
-        log.info("Checking compatibility between %s and %s-patches" % (self.original.branch, self.original.branch))
-        subject = {
-            "target-branch": self.original.branch,
-            "recombination": {
-                main_source_name : {
-                    "branch": pick_branch,
-                    "revision": pick_revision,
+            log.critical("Unknown Recombination type")
+            raise RecombinationTypeError
+
+        self.recomb_data = {
+            "sources": {
+                "main": {
+                    "name": main_source_name,
+                    "branch": main_source.branch,
+                    "revision": main_source.revision,
                     "id": main_source.uuid
                 },
-                patches_source_name: {
-                    "branch": merge_branch,
-                    "revision": merge_revision,
+                "patches" : {
+                    "name": patches_source_name,
+                    "branch": patches_source.branch,
+                    "revision": patches_source.revision,
                     "id": patches_source.uuid
                 }
             }
         }
-        fd, commit_message_filename = tempfile.mkstemp(prefix="recomb-", suffix=".yaml", text=True)
-        os.close(fd)
-        with open(commit_message_filename, 'w') as commit_message_file:
-            # We have to be sure this is the first line in yaml document
-            commit_message_file.write("Recombination: %s-%s/%s\n" % (main_source_name, patches_source_name, pick_branch))
-            yaml.safe_dump(subject, commit_message_file, default_flow_style=False, indent=4, canonical=False, default_style=False)
-        self.project.underlayer.track_branch(pick_branch, 'remotes/%s/%s' % (main_source_name, pick_branch))
-        self.project.underlayer.recombine(commit_message_filename, pick_branch, recombination_branch, starting_revision, pick_revision, merge_revision)
-        self.recombination_attempt = (self.original.branch, pick_revision, merge_revision)
-        self.project.underlayer.delete_branch(pick_branch)
-        return True
 
-    def test(self, main_source, patches_source):
-        if not self.attempt(main_source, patches_source):
-            return False
-        log.debug("Merge check with master-patches successful, ready to create review")
-        if not self.upload():
-            log.error("upload of recombination with change %s did not succeed. Exiting" % recomb_id)
-            return False
-        return True
+    def attempt(self):
+        # patches_revision = self.project.get_revision(self.patches.revision)
+        self.set_recomb_data()
+        self.underlayer.recombine(self.recomb_data, self.branch)
 
-    def submit(self):
-        recomb = self.__dict__
-        log.debugvar('recomb')
-        log.info("Approved replica recombination %s is about to be submitted for merge" % self.number)
-        if super(Recombination, self).submit():
-            log.success("Submission of recombination %s succeeded" % self.number)
+    def test(self):
+        try:
+            self.attempt()
+            log.debug("Merge check with master-patches successful, ready to create review")
+        except AttemptError:
+            raise AttemptError
+
+    def sync_replica(self, replica_branch):
+        if self.recomb_type == 'original-diversity':
+            log.info("Advancing replica branch %s to %s " % (replica_branch, self.original_change.revision))
+            self.underlayer.sync_replica(replica_branch, self.original_change.revision)
         else:
-            log.error("Submission of recombination %s failed" % self.number)
-            return False
-        self.generate_tag_branch()
-        return True
-
-    def generate_tag_branch(self):
-        self.project.underlayer.push_merge(self.recombination_attempt)
-
-    def sync_replica(self):
-        if self.original.merge_commit:
-            commit = self.original.merge_commit
-        else:
-            commit = self.original.revision
-        log.info("Advancing replica branch %s to %s " % (self.original.branch, commit))
-        if not self.project.underlayer.sync_replica(self.original.branch, commit):
-            return False
-        return True
-
+            raise RecombinationTypeError

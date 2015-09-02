@@ -43,11 +43,17 @@ class Gerrit(object):
 
     def upload_change(self, branch, topic):
         shell('git checkout %s' % branch)
-        shell('git review -D -r %s -t "%s" %s' % (self.name, topic, branch))
+        cmd = shell('git review -D -r %s -t "%s" %s' % (self.name, topic, branch))
+        for line in cmd.output:
+            if 'Nothing to do' in line:
+                log.debug("trying alternative upload method")
+                shell("git push %s HEAD:refs/drafts/%s/%s" % (self.name, branch, topic))
+                break
         cmd = shell('ssh %s gerrit query --current-patch-set --format json "topic:%s AND status:open"' % (self.host, topic))
         shell('git checkout parking')
         log.debug(pprint.pformat(cmd.output))
         if not cmd.output[:-1]:
+            shell('git push replica :%s' % branch)
             return None
         gerrit_infos = json.loads(cmd.output[:-1][0])
         infos = self.normalize_infos(gerrit_infos)
@@ -88,7 +94,7 @@ class Gerrit(object):
         infos = {}
         infos['revision'] = gerrit_infos['currentPatchSet']['revision']
         infos['parent'] = gerrit_infos['currentPatchSet']['parents'][0]
-        infos['patchet_number'] = gerrit_infos['currentPatchSet']['number']
+        infos['patchset_number'] = gerrit_infos['currentPatchSet']['number']
         infos['patchset_revision'] = gerrit_infos['currentPatchSet']['revision']
         infos['project-name'] = gerrit_infos['project']
         infos['branch'] = gerrit_infos['branch']
@@ -127,21 +133,30 @@ class Gerrit(object):
 
         for gerrit_infos in changes_infos:
             infos = self.normalize_infos(gerrit_infos)
-            change = Change(infos=infos, repo=self)
+            change = Change(infos=infos, remote=self)
             changes[infos[key_field]] = change
 
         return changes
 
-    def get_recombinations(self, commits):
-        recombinations = OrderedDict()
-        for line in commits:
-            if re.search('Change-Id: ', line):
-                recombinations[re.sub(r'\s*Change-Id: ', '', line.rstrip('\n'))] = None
+    def get_original_ids(self, commits):
+        ids = OrderedDict()
+        for commit in commits:
+            main_revision = commit['hash']
+            # in gerrit, merge commits do not have Change-id
+            # if commit is a merge commit, search the second parent for a Change-id
+            if len(commit['parents']) != 1:
+                commit = commit['subcommits'][0]
+            found = False
+            for line in commit['body']:
+                if re.search('Change-Id: ', line):
+                    ids[re.sub(r'\s*Change-Id: ', '', line)] = main_revision
+                    found = True
+            if not found:
+                log.warning("no Change-id found in commit %s or its ancestors" % main_revision)
 
-        return recombinations
+        return ids
 
-    def download_review(self, download_dir, recomb_id=None, branch=''):
-        dirlist = list()
+    def get_untested_recombs_infos(self, recomb_id=None, branch=''):
         if recomb_id:
             change_query = 'AND change:%s' % recomb_id
         else:
@@ -149,25 +164,11 @@ class Gerrit(object):
         query = "'owner:self AND project:%s %s AND branch:^recomb-.*-%s.* AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND NOT status:abandoned)'"  % (self.project_name, change_query, branch)
         untested_recombs = self.query_changes_json(query)
         log.debugvar('untested_recombs')
-        if not untested_recombs:
-            return None
-        else:
-            for recomb in untested_recombs:
-                recomb_dir = "%s/%s" % (download_dir, recomb['number'])
-                try:
-                    os.makedirs(recomb_dir)
-                except OSError:
-                    pass
-                ref = 'refs/changes/%s/%s/%s' % (recomb['number'][-2:], recomb['number'], recomb['currentPatchSet']['number'])
-                os.chdir(recomb_dir)
-                shell('git init')
-                shell('git pull %s %s' % (self.url, ref))
-                dirlist.append(recomb_dir)
-        return dirlist
+        return untested_recombs
 
     def get_approved_change_infos(self, branch):
         infos = dict()
-        query_string = "'owner:self AND project:%s AND branch:^%s AND label:Code-Review+2 AND label:Verified+1 AND NOT status:abandoned AND NOT status:merged'" % (self.project_name, branch)
+        query_string = "'owner:self AND project:%s AND branch:^%s AND label:Code-Review+2 AND label:Verified+1 AND NOT status:abandoned'" % (self.project_name, branch)
         changes_infos = self.query_changes_json(query_string)
 
         for gerrit_infos in changes_infos:
