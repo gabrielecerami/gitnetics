@@ -1,7 +1,8 @@
-# Performs sanity check for midstream
 import re
 import sys
 import os
+import tempfile
+import yaml
 from shellcommand import shell
 from collections import OrderedDict
 from ..datastructures import Change
@@ -15,25 +16,32 @@ class Git(object):
         revision = cmd.output[0].rstrip('\n')
         return revision
 
-    def get_commits(self, revision_start, revision_end):
+    def get_commits(self, revision_start, revision_end, first_parent=True, reverse=True):
+        options = ''
+        commit_list = list()
         log.debug("Interval: %s..%s" % (revision_start, revision_end))
 
         os.chdir(self.directory)
         shell('git checkout parking')
-        cmd = shell('git log --topo-order --reverse --pretty=raw %s..%s --no-merges' % (revision_start, revision_end))
+        if reverse:
+            options = '%s --reverse' % options
+        if first_parent:
+            options = '%s --first-parent' % options
+        cmd = shell('git rev-list %s --pretty="%%H" %s..%s | grep -v ^commit' % (options, revision_start, revision_end))
 
-        return cmd.output
+        for commit_hash in cmd.output:
+            commit = dict()
+            commit['hash'] = commit_hash
+            cmd = shell('git show -s --pretty="%%P" %s' % commit_hash)
+            commit['parents'] = cmd.output[0].split(' ')
+            cmd = shell('git show -s --pretty="%%B" %s' % commit_hash)
+            commit['body'] = cmd.output
+            if len(commit['parents']) > 1:
+                commit['subcommits'] = self.get_commits(commit['parents'][0], commit['parents'][1], first_parent=False, reverse=False)
 
-    def get_merge_commits(self, revision_start, revision_end):
-        merge_commits = []
-        cmd = shell('git log --topo-order --reverse --pretty=format:"%%H %%P" %s..%s --merges' % (revision_start, revision_end))
-        for line in map(lambda line: line.rstrip('\n'), cmd.output):
-            merge = {}
-            merge['commit'] = line.split(' ')[0]
-            merge['parents'] = line.split(' ')[1:]
-            merge_commits.append(merge)
+            commit_list.append(commit)
 
-        return merge_commits
+        return commit_list
 
     def get_changes_by_id(self, search_values, search_field='commit', key_field='revision', branch=None):
         changes = dict()
@@ -49,7 +57,7 @@ class Git(object):
             else:
                 infos['branch'] = branch
             infos['project-name'] = self.project_name
-            change = Change(infos=infos, repo=self)
+            change = Change(infos=infos, remote=self)
             changes[infos[key_field]] = change
         return changes
 
@@ -98,13 +106,40 @@ class LocalRepo(Git):
         for branch in branches:
             shell('git push %s :%s' % (remote_name,branch))
 
-    def recombine(self, commit_message_filename, pick_branch, recombination_branch, starting_revision, pick_revision, merge_revision):
+    def extract_recomb_data(self, recomb_data):
+        pick_revision = recomb_data['sources']['main']['revision']
+        #pick_branch = main_source.branch
+        cmd = shell('git rev-parse %s~1' % pick_revision)
+        starting_revision = cmd.output[0]
+        merge_revision = recomb_data['sources']['patches']['revision']
+
+        # if the patches revision to be merged is a merge commit
+        # select the second parent instead
+        # or the merge will fail
+        cmd = shell('git show -s --pretty=format:"%%P" %s' % merge_revision)
+        merge_revision_parents = cmd.output[0].split(' ')
+        if len(merge_revision_parents) > 1:
+            merge_revision = merge_revision_parents[1]
+        # self.track_branch(pick_branch, 'remotes/%s/%s' % (main_source_name, pick_branch))
+
+        return pick_revision, starting_revision, merge_revision
+
+    def recombine(self, recomb_data, recombination_branch):
+
+        pick_revision, starting_revision, merge_revision = self.extract_recomb_data(recomb_data)
+        fd, commit_message_filename = tempfile.mkstemp(prefix="recomb-", suffix=".yaml", text=True)
+        os.close(fd)
+        with open(commit_message_filename, 'w') as commit_message_file:
+            # We have to be sure this is the first line in yaml document
+            commit_message_file.write("recombination: %s-%s/%s\n\n" % (recomb_data['sources']['main']['name'], recomb_data['sources']['patches']['name'], recomb_data['sources']['main']['branch']))
+            yaml.safe_dump(recomb_data, commit_message_file, default_flow_style=False, indent=4, canonical=False, default_style=False)
+
         shell('git fetch replica')
         shell('git fetch original')
         retry_merge = True
         first_try = True
         while retry_merge:
-            shell('git checkout %s' % pick_branch)
+            # shell('git checkout %s' % pick_branch)
 
             shell('git checkout -B %s %s' % (recombination_branch, starting_revision))
 
@@ -143,43 +178,51 @@ class LocalRepo(Git):
             else:
                 retry_merge = False
 
-        shell("git commit -F %s" % (commit_message_filename))
-        os.unlink(commit_message_filename)
-        shell('git checkout %s' % pick_branch)
+        cmd = shell("git commit -F %s" % (commit_message_filename))
+        # If two changes with the exact content are merged upstream
+        # the above command will succeed but nothing will be committed.
+        # and recombination upload will fail due to no change.
+        # this assures that we will always commit something to upload
+        for line in cmd.output:
+            if 'nothing to commit' in line:
+                shell("git commit --allow-empty -F %s" % (commit_message_filename))
+                break
 
-    def sync_replica(self, branch, commit):
+        os.unlink(commit_message_filename)
+        # shell('git checkout %s' % pick_branch)
+        # self.delete_branch(pick_branch)
+
+    def sync_replica(self, replica_branch, revision):
         os.chdir(self.directory)
         shell('git fetch replica')
-        shell('git branch --track replica-%s remotes/replica/%s' % (branch, branch))
-        shell('git checkout replica-%s' % branch)
-        cmd = shell('git merge --ff-only %s' % commit)
+        shell('git branch --track replica-%s remotes/replica/%s' % (replica_branch, replica_branch))
+        shell('git checkout replica-%s' % replica_branch)
+        cmd = shell('git merge --ff-only %s' % revision)
         if cmd.returncode != 0:
             log.debug(cmd.output)
             log.critical("Error merging. Exiting")
-            sys.exit(1)
-        cmd = shell('git push replica HEAD:%s' % branch)
+            raise MergeError
+        cmd = shell('git push replica HEAD:%s' % replica_branch)
         if cmd.returncode != 0:
             log.debug(cmd.output)
             log.critical("Error pushing the merge. Exiting")
-            sys.exit(1)
+            raise PushError
         shell('git checkout parking')
-        shell('git branch -D replica-%s' % branch)
-        return True
+        shell('git branch -D replica-%s' % replica_branch)
 
-    def push_merge(self, recombination_attempt):
-        # FIXME: checkout from merge commit if it exists, not the simple commit
-        branch, starting_revision, merge_revision = recombination_attempt
+    def push_merge(self, recomb_data, target_branch):
+        pick_revision, starting_revision, merge_revision = self.extract_recomb_data(recomb_data)
         shell('git fetch replica')
-        shell('git branch --track replica-%s remotes/replica/%s' % (branch, branch))
-        shell('git checkout replica-%s' % branch)
-        shell('git checkout -B %s-tag %s' % (branch, starting_revision))
+        #shell('git branch --track replica-%s remotes/replica/%s' % (target_branch, target_branch))
+        #shell('git checkout replica-%s' % target_branch)
+        shell('git checkout -B %s %s' % (target_branch, starting_revision))
         shell("git merge %s" % (merge_revision))
 
-        shell('git push -f replica HEAD:%s-tag' % (branch))
+        shell('git push -f replica HEAD:%s' % (target_branch))
 
         shell('git checkout parking')
-        shell('git branch -D %s-tag' % branch)
-        shell('git branch -D replica-%s' % branch)
+        shell('git branch -D %s' % target_branch)
+        #shell('git branch -D replica-%s' % target_branch)
 
     def resolve_conflicts(self, output):
         return True
@@ -193,12 +236,10 @@ class RemoteGit(Git):
         self.directory = directory
         self.project_name = project_name
 
-    def get_recombinations(self, commits):
-        recombinations = OrderedDict()
-        for line in commits:
-            if re.search('^commit ', line):
-                recombinations[re.sub(r'^commit ', '', line.rstrip('\n'))] = None
-
-        return recombinations
+    def get_original_ids(self, commits):
+        ids = list()
+        for commit in commits:
+            ids.append(commit['hash'])
+        return ids
 
 

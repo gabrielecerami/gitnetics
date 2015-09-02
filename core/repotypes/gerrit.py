@@ -48,6 +48,7 @@ class Gerrit(object):
         shell('git checkout parking')
         log.debug(pprint.pformat(cmd.output))
         if not cmd.output[:-1]:
+            shell('git push replica :%s' % branch)
             return None
         gerrit_infos = json.loads(cmd.output[:-1][0])
         infos = self.normalize_infos(gerrit_infos)
@@ -127,18 +128,27 @@ class Gerrit(object):
 
         for gerrit_infos in changes_infos:
             infos = self.normalize_infos(gerrit_infos)
-            change = Change(infos=infos, repo=self)
+            change = Change(infos=infos, remote=self)
             changes[infos[key_field]] = change
 
         return changes
 
-    def get_recombinations(self, commits):
-        recombinations = OrderedDict()
-        for line in commits:
-            if re.search('Change-Id: ', line):
-                recombinations[re.sub(r'\s*Change-Id: ', '', line.rstrip('\n'))] = None
+    def get_original_ids(self, commits):
+        ids = list()
+        for commit in commits:
+            # in gerrit, merge commits do not have Change-id
+            # if commit is a merge commit, search the second parent for a Change-id
+            if len(commit['parents']) != 1:
+                commit = commit['subcommits'][0]
+            found = False
+            for line in commit['body']:
+                if re.search('Change-Id: ', line):
+                    ids.append(re.sub(r'\s*Change-Id: ', '', line))
+                    found = True
+            if not found:
+                log.warning("no Change-id found in commit %s" % commit['hash'])
 
-        return recombinations
+        return ids
 
     def download_review(self, download_dir, recomb_id=None, branch=''):
         dirlist = list()
