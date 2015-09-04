@@ -79,12 +79,14 @@ class LocalRepo(Git):
             shell('git checkout --orphan parking')
         shell('git commit --allow-empty -a -m "parking"')
         shell('scp -p gerrithub:hooks/commit-msg .git/hooks/')
-        # TODO: autmatically add all already present remotes
+
 
     def addremote(self, name, url):
         os.chdir(self.directory)
         # TODO: check of its existence first (fetch anyway)
-        shell('git remote add %s %s' % (name, url))
+        cmd = shell('git remote | grep ^%s$' % name)
+        if cmd.returncode != 0:
+            shell('git remote add %s %s' % (name, url))
         shell('git fetch %s' % (name))
 
     def add_gerrit_remote(self, name, location, project_name):
@@ -126,7 +128,6 @@ class LocalRepo(Git):
         merge_revision_parents = cmd.output[0].split(' ')
         if len(merge_revision_parents) > 1:
             merge_revision = merge_revision_parents[1]
-        # self.track_branch(pick_branch, 'remotes/%s/%s' % (main_source_name, pick_branch))
 
         return pick_revision, starting_revision, merge_revision
 
@@ -146,12 +147,9 @@ class LocalRepo(Git):
         retry_merge = True
         first_try = True
         while retry_merge:
-            # shell('git checkout %s' % pick_branch)
 
             shell('git checkout -B %s %s' % (recombination_branch, starting_revision))
 
-            # TODO: handle exception: two identical changes in row creates no
-            # diff, so no commit can be created
             log.info("Creating remote disposable branch on replica")
             shell('git push replica HEAD:%s' % recombination_branch)
 
@@ -196,8 +194,6 @@ class LocalRepo(Git):
                 break
 
         os.unlink(commit_message_filename)
-        # shell('git checkout %s' % pick_branch)
-        # self.delete_branch(pick_branch)
 
     def sync_replica(self, replica_branch, revision):
         os.chdir(self.directory)

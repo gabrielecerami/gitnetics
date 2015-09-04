@@ -181,21 +181,3 @@ class Recombination(Change):
             self.underlayer.sync_replica(replica_branch, self.original_change.revision)
         else:
             raise RecombinationTypeError
-
-#class RecombinationGroup(object):
-#
-#   def __init__(self):
-#        self.recombinations = OrderedDict()
-#        self.merged_wtih_commit = None
-#        self.ancestor = None
-#
-#    def iscomplete(self):
-#        for recomb in self.recombinations:
-#            if not recomb.issubmitted():
-#                return False
-#
-#        return True
-#
-#    def merge:self):
-#        if self.iscomplete()
-#        pushmerge(self.merged_with_commit)
