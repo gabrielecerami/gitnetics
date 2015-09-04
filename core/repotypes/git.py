@@ -74,17 +74,23 @@ class LocalRepo(Git):
             pass
         os.chdir(self.directory)
         shell('git init')
-        shell('git checkout --orphan parking')
+        cmd = shell('git checkout parking')
+        if cmd.returncode != 0:
+            shell('git checkout --orphan parking')
         shell('git commit --allow-empty -a -m "parking"')
         shell('scp -p gerrithub:hooks/commit-msg .git/hooks/')
+        # TODO: autmatically add all already present remotes
 
     def addremote(self, name, url):
         os.chdir(self.directory)
-        shell('git remote add -f %s %s' % (name, url))
+        # TODO: check of its existence first (fetch anyway)
+        shell('git remote add %s %s' % (name, url))
+        shell('git fetch %s' % (name))
 
     def add_gerrit_remote(self, name, location, project_name):
         self.remotes[name] = Gerrit(name, location, project_name)
         self.addremote(name, self.remotes[name].url)
+        shell('git fetch %s +refs/changes/*:refs/remotes/%s/changes/*' % (name, name))
 
     def add_git_remote(self, name, location, project_name):
         self.remotes[name] = RemoteGit(name, location, self.directory, project_name)
@@ -126,6 +132,9 @@ class LocalRepo(Git):
 
     def recombine(self, recomb_data, recombination_branch):
 
+        shell('git fetch replica')
+        shell('git fetch original')
+
         pick_revision, starting_revision, merge_revision = self.extract_recomb_data(recomb_data)
         fd, commit_message_filename = tempfile.mkstemp(prefix="recomb-", suffix=".yaml", text=True)
         os.close(fd)
@@ -134,8 +143,6 @@ class LocalRepo(Git):
             commit_message_file.write("recombination: %s-%s/%s\n\n" % (recomb_data['sources']['main']['name'], recomb_data['sources']['patches']['name'], recomb_data['sources']['main']['branch']))
             yaml.safe_dump(recomb_data, commit_message_file, default_flow_style=False, indent=4, canonical=False, default_style=False)
 
-        shell('git fetch replica')
-        shell('git fetch original')
         retry_merge = True
         first_try = True
         while retry_merge:
@@ -210,19 +217,15 @@ class LocalRepo(Git):
         shell('git checkout parking')
         shell('git branch -D replica-%s' % replica_branch)
 
-    def push_merge(self, recomb_data, target_branch):
-        pick_revision, starting_revision, merge_revision = self.extract_recomb_data(recomb_data)
+    def update_target_branch(self, replica_branch, patches_branch, target_branch):
         shell('git fetch replica')
-        #shell('git branch --track replica-%s remotes/replica/%s' % (target_branch, target_branch))
-        #shell('git checkout replica-%s' % target_branch)
-        shell('git checkout -B %s %s' % (target_branch, starting_revision))
-        shell("git merge %s" % (merge_revision))
+        shell('git checkout -B new-%s remotes/replica/%s' % (target_branch, replica_branch))
+        shell("git merge remotes/replica/%s" % (patches_branch))
 
         shell('git push -f replica HEAD:%s' % (target_branch))
 
         shell('git checkout parking')
-        shell('git branch -D %s' % target_branch)
-        #shell('git branch -D replica-%s' % target_branch)
+        shell('git branch -D new-%s' % target_branch)
 
     def resolve_conflicts(self, output):
         return True

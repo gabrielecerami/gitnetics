@@ -43,7 +43,12 @@ class Gerrit(object):
 
     def upload_change(self, branch, topic):
         shell('git checkout %s' % branch)
-        shell('git review -D -r %s -t "%s" %s' % (self.name, topic, branch))
+        cmd = shell('git review -D -r %s -t "%s" %s' % (self.name, topic, branch))
+        for line in cmd.output:
+            if 'Nothing to do' in line:
+                log.debug("trying alternative upload method")
+                shell("git push %s HEAD:refs/drafts/%s/%s" % (self.name, branch, topic))
+                break
         cmd = shell('ssh %s gerrit query --current-patch-set --format json "topic:%s AND status:open"' % (self.host, topic))
         shell('git checkout parking')
         log.debug(pprint.pformat(cmd.output))
@@ -134,8 +139,9 @@ class Gerrit(object):
         return changes
 
     def get_original_ids(self, commits):
-        ids = list()
+        ids = OrderedDict()
         for commit in commits:
+            main_revision = commit['hash']
             # in gerrit, merge commits do not have Change-id
             # if commit is a merge commit, search the second parent for a Change-id
             if len(commit['parents']) != 1:
@@ -143,14 +149,15 @@ class Gerrit(object):
             found = False
             for line in commit['body']:
                 if re.search('Change-Id: ', line):
-                    ids.append(re.sub(r'\s*Change-Id: ', '', line))
+                    ids[re.sub(r'\s*Change-Id: ', '', line)] = main_revision
                     found = True
             if not found:
-                log.warning("no Change-id found in commit %s" % commit['hash'])
+                log.warning("no Change-id found in commit %s or its ancestors" % main_revision)
 
         return ids
 
     def download_review(self, download_dir, recomb_id=None, branch=''):
+        # TODO: use refs/replica/changes already downloaded instead
         dirlist = list()
         if recomb_id:
             change_query = 'AND change:%s' % recomb_id
@@ -177,7 +184,7 @@ class Gerrit(object):
 
     def get_approved_change_infos(self, branch):
         infos = dict()
-        query_string = "'owner:self AND project:%s AND branch:^%s AND label:Code-Review+2 AND label:Verified+1 AND NOT status:abandoned AND NOT status:merged'" % (self.project_name, branch)
+        query_string = "'owner:self AND project:%s AND branch:^%s AND label:Code-Review+2 AND label:Verified+1 AND NOT status:abandoned'" % (self.project_name, branch)
         changes_infos = self.query_changes_json(query_string)
 
         for gerrit_infos in changes_infos:

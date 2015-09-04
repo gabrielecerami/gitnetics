@@ -11,6 +11,8 @@ from repotypes.gerrit import Gerrit
 
 class TestError(Exception):
     pass
+class RecombinationApproveError(object):
+    pass
 class RecombinationSubmitError(object):
     pass
 class RecombinationSyncReplicaError(object):
@@ -35,9 +37,15 @@ class Project(object):
         self.original_project = project_info['original']
         self.replica_project = project_info['replica']
         self.deploy_name = project_info['deploy-name']
+        if 'revision_lock' in self.replica_project:
+            for branch in self.replica_project['revision_lock']:
+                # no advancement will be performed past this revision on this branch
+                self.branch_limit[branch] = self.replica_project['revision_lock'][branch]
 
+        # Set up local repo
         self.underlayer = LocalRepo(project_name, local_dir)
 
+        # Set up remotes
         self.underlayer.add_gerrit_remote('replica', self.replica_project['location'], self.replica_project['name'])
 
         self.replica_remote = self.underlayer.remotes['replica']
@@ -53,34 +61,43 @@ class Project(object):
         self.patches_remote = self.replica_remote
 
         self.underlayer.add_git_remote('replica-mirror', 'github', self.replica_project['name'])
+
+
+        # Set up branches hypermap
         # get branches from original
         #self.original_branches = self.underlayer.list_branches('original')
         self.original_branches = project_info['original']['watch-branches']
-        ob = self.original_branches
-        log.debugvar('ob')
-
-        # reverse map branches
-
         self.replica_branches = dict()
+        self.target_branches = dict()
+        self.patches_branches = dict()
         for original_branch in self.original_branches:
             # apply mapping to find target branch
             try:
                 replica_branch = project_info['replica']['branch-mappings'][original_branch]
             except KeyError:
                 replica_branch = original_branch
-            self.replica_branches[original_branch] = replica_branch
+            target_branch = '%s-tag' % replica_branch
+            patches_branch = '%s-patches' % replica_branch
+
+            self.replica_branches['original:' + original_branch] = replica_branch
+            self.replica_branches['patches:' + patches_branch] = replica_branch
+            self.replica_branches['target:' + target_branch] = replica_branch
+
+            self.target_branches['original:' + original_branch] = target_branch
+            self.target_branches['replica:' + replica_branch] = target_branch
+            self.target_branches['patches:' + patches_branch] = target_branch
+
+            self.patches_branches['original:' + original_branch] = patches_branch
+            self.patches_branches['replica:' + replica_branch] = patches_branch
+            self.patches_branches['target:' + target_branch] = patches_branch
+
             self.recombinations[replica_branch] = None
             self.commits[replica_branch] = {}
 
-        self.target_branches = dict()
-        self.patches_branches = dict()
-        for replica_branch in self.replica_branches:
-            self.target_branches[replica_branch] = '%s-tag' % replica_branch
-            self.patches_branches[replica_branch] = '%s-patches' % replica_branch
-
-        p = self.__dict__
-        log.debugvar('p')
-        #self.recombinations_attempts = []
+    def update_target_branch(self, replica_branch):
+        target_branch = self.target_branches['replica:' + replica_branch]
+        patches_branch = self.patches_branches['replica:' + replica_branch]
+        self.underlayer.update_target_branch(replica_branch, patches_branch, target_branch)
 
     def get_slices(self, recombinations):
         slices = {
@@ -138,8 +155,8 @@ class Project(object):
         log.debug("Scanning distance from original branch %s" % original_branch)
         self.recombinations[original_branch] = self.get_recombinations_by_interval(original_branch)
         slices = self.get_slices(self.recombinations[original_branch])
-        replica_branch = self.replica_branches[original_branch]
-        target_branch = self.target_branches[replica_branch]
+        replica_branch = self.replica_branches['original:'+ original_branch]
+        target_branch = self.target_branches['original:' + original_branch]
         recombinations = self.recombinations[original_branch]
 
 
@@ -157,6 +174,7 @@ class Project(object):
             recomb_id = list(recombinations)[segment['end'] - 1]
             recombination = recombinations[recomb_id]
             recombination.sync_replica(replica_branch)
+            self.update_target_branch(replica_branch)
 
         # Gerrit operations from approved changes
         # NOthing 'approved' can be merged if it has some "present" before in the history
@@ -176,13 +194,14 @@ class Project(object):
             for recomb_id in list(recombinations)[segment['start']:segment['end']]:
                 recombination = recombinations[recomb_id]
                 try:
-                    recombination.submit(target_branch)
-                except RecombinationSubmitError:
-                    log.error("Recombination not submitted")
-                try:
                     recombination.sync_replica(replica_branch)
                 except RecombinationSyncReplicaError:
                     log.error("Replica could not be synced")
+                self.update_target_branch(replica_branch)
+                try:
+                    recombination.submit()
+                except RecombinationSubmitError:
+                    log.error("Recombination not submitted")
 
         # Notify of presence
         for segment in slices['PRESENT']:
@@ -203,77 +222,19 @@ class Project(object):
 
         return True
 
-    def get_recombination_by_search_key(self, search_key, search_field='change', key_field='id', branch=None):
-        infos = self.replica_remote.get_changes_info([search_key], search_field=search_field, key_field=key_field, branch=branch)
-        if search_key in infos:
-            recombination = Recombination(self, infos=infos[search_key])
-            return recombination
-        return None
-
-    def recombine_from_patches(self, patches_change_id):
-        recombinations = OrderedDict()
-
-        recombination = self.get_recombination_by_search_key(patches_change_id, search_field='topic', key_field='topic')
-
-        if not recombination:
-            patches_change = self.replica_remote.get_changes_by_id([patches_change_id])[patches_change_id]
-            recombination = Recombination(self)
-            recombination.patches = patches_change
-            recombination.patches.repo = self.replica_remote
-
-            recombination.original = Change(repo=self.original_remote)
-            recombination.original.branch = re.sub('-patches','', recombination.patches.branch)
-
-            change = Change(repo=self.replica_remote)
-            change.branch = recombination.original.branch
-            change.revision = self.underlayer.get_revision("remotes/replica/%s" % recombination.original.branch)
-            change.parent = self.underlayer.get_revision("remotes/replica/%s~1" % recombination.original.branch)
-            change.previous_commit = change.parent
-            change.uuid = change.revision
-
-
-            recombination.replica = change
-
-            recombination.branch = "recomb-patches-%s-%s" % (recombination.replica.branch, recombination.replica.revision)
-            recombination.topic = patches_change_id
-            recombination.status = "MISSING"
-
-        recombinations[patches_change_id] = recombination
-        return recombinations
-
-    def scan_replica_patches(self):
-        for original_branch in self.original_branches:
-            replica_branch = self.replica_branches[original_branch]
-            patches_branch = self.patches_branches[replica_branch]
-            patches_changes = self.patches_remote.get_changes_by_id([patches_branch], search_field='branch', branch=patches_branch )
-            for change in patches_changes:
-                self.replica_patch(change)
-
-    def replica_patch(self, change_id):
-        recombination = self.get_recombination_by_patch_change(change_id)
-        if recombination.status == "MISSING":
-            if not recombination.test('replica', 'mutation'):
-                log.error("Recombination attempt unsuccessful")
-                return False
-            recombination.upload()
-        else:
-           log.warning("Master patches recombination present as number %s and waiting for approval" % recombination.number)
-        return True
-
     def poll_original_branches(self):
         for branch in self.original_branches:
             self.scan_original_distance(branch)
 
     def get_recombinations_by_interval(self, original_branch):
         revision_start = 'remotes/replica/%s' % (original_branch)
-        replica_branch = self.replica_branches[original_branch]
+        replica_branch = self.replica_branches['original:' + original_branch]
         revision_end = 'remotes/original/%s' % (replica_branch)
-        patches_branch = self.patches_branches[replica_branch]
+        patches_branch = self.patches_branches['original:' + original_branch]
         diversity_refname = "remotes/replica/%s" % (patches_branch)
         self.commits[replica_branch] = self.underlayer.get_commits(revision_start, revision_end)
         commits = self.commits[replica_branch]
         ids = self.original_remote.get_original_ids(commits)
-        log.debugvar("ids")
 
         recombinations = OrderedDict()
         if ids:
@@ -281,30 +242,27 @@ class Project(object):
             for recomb_id in ids:
                 recombinations[recomb_id] = None
 
-            original_changes = self.original_remote.get_changes_by_id(ids, branch=original_branch)
-            log.debugvar('original_changes')
-            replicas_infos = self.replica_remote.get_changes_info(ids, search_field='topic', key_field='topic')
-            #replica_revision = self.underlayer.get_revision("remotes/replica/%s" % replica_branch)
+            original_changes = self.original_remote.get_changes_by_id(list(ids), branch=original_branch)
+            recomb_infos = self.recomb_remote.get_changes_info(list(ids), search_field='topic', key_field='topic')
             diversity_revision = self.underlayer.get_revision(diversity_refname)
             diversity_change = self.underlayer.get_changes_by_id([diversity_revision], branch=patches_branch)[diversity_revision]
 
             for recomb_id in ids:
-                if recomb_id in replicas_infos:
+                if recomb_id in recomb_infos:
                     # relative recombination exists, load informations
-                    recombinations[recomb_id] = Recombination(self.underlayer, 'original-diversity', remote=self.recomb_remote, infos=replicas_infos[recomb_id], original_remote=self.original_remote)
+                    recombinations[recomb_id] = Recombination(self.underlayer, 'original-diversity', remote=self.recomb_remote, infos=recomb_infos[recomb_id], original_remote=self.original_remote)
                 else:
                     # relative recombination missing, creating empty one
+                    # Set real commit as revision
+                    original_changes[recomb_id].revision = ids[recomb_id]
                     recombinations[recomb_id] = Recombination(self.underlayer, 'original-diversity', remote=self.recomb_remote)
                     recombinations[recomb_id].status = "MISSING"
                     recombinations[recomb_id].branch = "recomb-original-%s-%s" % (original_branch, original_changes[recomb_id].revision)
                     recombinations[recomb_id].topic = recomb_id
-                #recombinations[recomb_id].replica = Change(repo=self.replica_remote)
-                #recombinations[recomb_id].replica.revision = replica_revision
-                #recombinations[recomb_id].replica.branch = replica_branch
 
-                recombinations[recomb_id].original_change = original_changes[recomb_id]
+                    recombinations[recomb_id].original_change = original_changes[recomb_id]
 
-                recombinations[recomb_id].diversity_change = diversity_change
+                    recombinations[recomb_id].diversity_change = diversity_change
 
             for recomb_id in ids:
                 log.debugvar('recomb_id')
@@ -313,26 +271,64 @@ class Project(object):
 
         return recombinations
 
-    def merge_tested_recombinations():
-        pass
+    def get_recombination_by_patch_change(self, patches_change_id):
+        infos = self.replica_remote.get_changes_info([patches_change_id], search_field='topic', key_field='topic')
+        if patches_change_id in infos:
+            recombination = Recombination(self.underlayer, 'replica-mutation', remote=self.recomb_remote, infos=infos[search_key])
+        else:
+            recombination = Recombination(self.underlayer, 'replica-mutation', remote=self.recomb_remote)
+            mutation_change = self.patches_remote.get_changes_by_id([patches_change_id])[patches_change_id]
+            patches_branch = mutation_change.branch
 
-    def scan_patches_branch(self, branch):
-        branch_patches = 'recomb-patches-%s.*' % branch
+            recombination.mutation_change = mutation_change
+            recombination.mutation_change.remote = self.patches_remote
+
+            change = Change(remote=self.replica_remote)
+            change.branch = self.replica_branches['patches:' + patches_branch]
+            change.revision = self.underlayer.get_revision("remotes/replica/%s" % replica_branch)
+            change.parent = self.underlayer.get_revision("remotes/replica/%s~1" % replica_branch)
+            change.uuid = change.revision
+
+            recombination.replica_change = change
+
+            recombination.branch = "recomb-patches-%s-%s" % (recombination.replica_change.branch, recombination.replica_change.revision)
+            recombination.topic = patches_change_id
+            recombination.status = "MISSING"
+
+        return recombination
+
+    def scan_replica_patches(self):
+        for original_branch in self.original_branches:
+            patches_branch = self.patches_branches['original:' + original_branch]
+            patches_changes = self.patches_remote.get_changes_by_id([patches_branch], search_field='branch', branch=patches_branch )
+            for patches_change_id in patches_changes:
+                recombination = self.get_recombination_by_patch_change(patches_change_id)
+                if recombination.status == "MISSING":
+                    recombination.test()
+                    # log.error("Recombination attempt unsuccessful")
+                    recombination.upload()
+                else:
+                    log.warning("Master patches recombination present as number %s and waiting for approval" % recombination.number)
+
+    def scan_patches_branch(self, replica_branch):
+        branch_patches = 'recomb-patches-%s.*' % replica_branch
         infos = self.replica_remote.get_approved_change_infos(branch_patches)
         for change_number in infos:
-            recombination = Recombination(self,infos=infos[change_number])
-            self.merge_replica_mutation_recombination(recombination)
+            recombination = Recombination(self.underlayer, 'replica-mutation', remote=self.recomb_remote, patches_remote=self.patches_remote, infos=infos[change_number])
+            self.merge_replica_mutation_recombination(recombination, replica_branch)
 
-    def merge_replica_mutation_recombination(self, recombination):
-        if recombination.patches.status != "MERGED":
-            if not recombination.patches.approve():
+    def merge_replica_mutation_recombination(self, recombination, replica_branch):
+        if recombination.mutation_change.status != "MERGED":
+            try:
+                recombination.mutation_change.approve()
+                recombination.mutation_change.submit()
+            except RecombinationApproveError:
                 log.error("Originating change approval failed")
-                return False
-            if not recombination.patches.submit():
+            except RecombinationSubmitError:
                 log.error("Originating change submission failed")
-                return False
+        self.update_target_branch(replica_branch)
         if recombination.status != "MERGED":
-            return recombination.submit()
+            recombination.submit()
         else:
             log.warning("Recombination already submitted")
         # update existing recombination from upstream changes
@@ -342,18 +338,17 @@ class Project(object):
 
     def check_approved_recombinations(self, recombination=None):
         if recombination:
-            if recombination.type == 'replica-mutation':
+            if recombination.recomb_type == 'replica-mutation':
                 self.merge_replica_mutation_recombination(recombination)
-            elif recombination.type == 'original-diversity':
+            elif recombination.recomb_type == 'original-diversity':
                 return self.scan_original_distance(branch=recombination.original.branch)
         else:
             for branch in self.original_branches:
                 self.scan_patches_branch(branch)
                 self.scan_original_distance(branch)
 
-
     def download_untested_recombinations(self, download_dir, recomb_id=None):
-        dirlist = self.replica_remopte.download_review(download_dir, recomb_id=recomb_id)
+        dirlist = self.replica_remote.download_review(download_dir, recomb_id=recomb_id)
         changes_infos = list()
         if dirlist:
             for test_dir in dirlist:

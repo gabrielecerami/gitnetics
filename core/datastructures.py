@@ -40,8 +40,8 @@ class Change(object):
             self.project_name = infos['project-name']
             if 'topic' in infos:
                 self.topic = infos['topic']
-            if 'patchet_number' in infos:
-                self.patchset_number = infos['patchet_number']
+            if 'patchset_number' in infos:
+                self.patchset_number = infos['patchset_number']
             if 'patchset_revision' in infos:
                 self.patchset_revision = infos['patchset_revision']
         else:
@@ -116,11 +116,13 @@ class Recombination(Change):
 
         self.recomb_type = header.split('/')[0]
         if self.recomb_type == 'replica-mutation':
-            self.mutation_change = self.patches_remote.get_changes_by_id([recomb_sources['patches']['id']])[recomb_sources['mutation']['id']]
-            self.replica_change = self.underlayer.get_changes_by_id([recomb_sources['replica']['id']], branch=recomb_sources['replica']['branch'])[recomb_sources['replica']['id']]
+            self.replica_change = self.underlayer.get_changes_by_id([recomb_sources['main']['id']], branch=recomb_sources['main']['branch'])[recomb_sources['main']['id']]
+            self.mutation_change = self.patches_remote.get_changes_by_id([recomb_sources['patches']['id']])[recomb_sources['patches']['id']]
         elif self.recomb_type == 'original-diversity':
-            self.diversity_change = self.underlayer.get_changes_by_id([recomb_sources['patches']['id']], branch=recomb_sources['patches']['branch'])[recomb_sources['patches']['id']]
             self.original_change = self.original_remote.get_changes_by_id([recomb_sources['main']['id']], branch=recomb_sources['main']['branch'])[recomb_sources['main']['id']]
+            # Set real commit as revision
+            self.original_change.revision = recomb_sources['main']['revision']
+            self.diversity_change = self.underlayer.get_changes_by_id([recomb_sources['patches']['id']], branch=recomb_sources['patches']['branch'])[recomb_sources['patches']['id']]
 
         self.set_recomb_data()
 
@@ -172,21 +174,6 @@ class Recombination(Change):
         except UploadError:
             log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
             raise UploadError
-
-    def submit(self, target_branch):
-        recomb = self.__dict__
-        log.debugvar('recomb')
-        log.info("Approved replica recombination %s is about to be submitted for merge" % self.number)
-        try:
-            self.underlayer.push_merge(self.recomb_data, target_branch)
-            log.success('Target branch updated')
-            try:
-                super(Recombination, self).submit()
-                log.success("Submission of recombination %s succeeded" % self.number)
-            except SubmitError:
-                log.error("Submission of recombination %s failed" % self.number)
-        except PushMergeError:
-            pass
 
     def sync_replica(self, replica_branch):
         if self.recomb_type == 'original-diversity':
