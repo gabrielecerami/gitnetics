@@ -1,6 +1,7 @@
 import sys
 import os
 import yaml
+import re
 from colorlog import log
 
 
@@ -112,9 +113,10 @@ class Recombination(Change):
             raise DecodeError
 
         recomb_sources = recomb_data['sources']
-        header = recomb_data['recombination']
+        header = recomb_data['Recombination']
 
-        self.recomb_type = header.split('/')[0]
+        recomb_header = header.split('/')[0]
+        self.recomb_type = re.sub(':[a-zA-Z0-9]{6}', '',recomb_header)
         if self.recomb_type == 'replica-mutation':
             self.replica_change = self.underlayer.get_changes_by_id([recomb_sources['main']['id']], branch=recomb_sources['main']['branch'])[recomb_sources['main']['id']]
             self.mutation_change = self.patches_remote.get_changes_by_id([recomb_sources['patches']['id']])[recomb_sources['patches']['id']]

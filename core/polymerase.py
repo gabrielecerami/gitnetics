@@ -1,5 +1,6 @@
 import copy
-from colorlog import log
+import shutil
+from colorlog import log, logsummary
 from project import Project
 
 
@@ -42,21 +43,26 @@ class Polymerase(object):
             raise ValueError
         log.debugvar('projects')
 
-        log.info("initializing local repositories for relevant projects")
+        logsummary.info("initializing and updating local repositories for relevant projects")
 
         for project_name in projects:
-            log.debug("Initializing project: %s locally" % project_name)
             try:
                 self.projects[project_name] = Project(project_name, projects[project_name], self.base_dir + "/"+ project_name)
+                logsummary.info("Project: %s initialized" % project_name)
             except Exception, e:
                 log.error(e)
-                log.error("Project %s not available, skipping" % project_name)
+                logsummary.error("Project %s skipped, reason: %s" % (project_name, e))
 
     def poll_original(self):
+        logsummary.info('Polling original for new changes. Checking status of all changes.')
         success = True
         for project_name in self.projects:
+            logsummary.info('Project: %s' % project_name)
             project = self.projects[project_name]
-            project.poll_original_branches()
+            try:
+                project.poll_original_branches()
+            except Exception, e:
+               logsummary.info("Problem with project %s: %s. Skipping" % (project_name, e))
         return success
 
     def poll_replica(self, project_name=None, patches_change_id=None):
@@ -71,16 +77,21 @@ class Polymerase(object):
                     success = False
         return success
 
-    def download_untested_recombinations(self, download_dir, recomb_id=None):
+    def fetch_untested_recombinations(self, fetch_dir, recomb_id=None):
+        logsummary.info('Fetching untested recombinations')
         tester_vars = dict()
-        tester_vars['projects'] = { 'projects': self.projects_conf }
+        tester_vars['projects_conf'] = { 'projects': self.projects_conf }
+        shutil.rmtree(fetch_dir, ignore_errors=True)
         for project_name in self.projects:
+            logsummary.info('Project: %s' % project_name)
             project = self.projects[project_name]
             log.debugvar('recomb_id')
-            changes_infos = project.download_untested_recombinations(download_dir, recomb_id=recomb_id)
-        for seq, test_infos in enumerate(changes_infos):
-            test_id = 'test-%s' % seq
-            tester_vars[test_id] = test_infos
+            try:
+                changes_infos = project.fetch_untested_recombinations(fetch_dir, recomb_id=recomb_id)
+                for change_number in changes_infos:
+                    tester_vars[change_number] = changes_infos[change_number]
+            except Exception, e:
+                logsummary.info("Problem with project %s: %s. Skipping" % (project_name, e))
         return tester_vars
 
     def check_approved_recombinations(self, project_name=None, recomb_id=None):

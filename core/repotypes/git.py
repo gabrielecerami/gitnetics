@@ -1,4 +1,3 @@
-import re
 import sys
 import os
 import tempfile
@@ -7,7 +6,7 @@ from shellcommand import shell
 from collections import OrderedDict
 from ..datastructures import Change
 from gerrit import Gerrit
-from ..colorlog import log
+from ..colorlog import log, logsummary
 
 class Git(object):
 
@@ -74,25 +73,30 @@ class LocalRepo(Git):
             pass
         os.chdir(self.directory)
         shell('git init')
+        # TODO: remove all local branches
+        # git for-each-ref --format="%(refname)" refs/heads | sed -e "s/refs\/heads//"
+        # for branch in local_branches:
+        #    shell('git branch -D %s' % branch)
         cmd = shell('git checkout parking')
         if cmd.returncode != 0:
             shell('git checkout --orphan parking')
-        shell('git commit --allow-empty -a -m "parking"')
-        shell('scp -p gerrithub:hooks/commit-msg .git/hooks/')
+            shell('git commit --allow-empty -a -m "parking"')
 
 
     def addremote(self, name, url):
         os.chdir(self.directory)
-        # TODO: check of its existence first (fetch anyway)
         cmd = shell('git remote | grep ^%s$' % name)
         if cmd.returncode != 0:
             shell('git remote add %s %s' % (name, url))
-        shell('git fetch %s' % (name))
+        cmd = shell('git fetch %s' % (name))
+        if cmd.returncode != 0:
+            raise RemoteFetchError
 
     def add_gerrit_remote(self, name, location, project_name):
         self.remotes[name] = Gerrit(name, location, project_name)
         self.addremote(name, self.remotes[name].url)
         shell('git fetch %s +refs/changes/*:refs/remotes/%s/changes/*' % (name, name))
+        shell('scp -p %s:hooks/commit-msg .git/hooks/' % location)
 
     def add_git_remote(self, name, location, project_name):
         self.remotes[name] = RemoteGit(name, location, self.directory, project_name)
@@ -124,10 +128,10 @@ class LocalRepo(Git):
         # if the patches revision to be merged is a merge commit
         # select the second parent instead
         # or the merge will fail
-        cmd = shell('git show -s --pretty=format:"%%P" %s' % merge_revision)
-        merge_revision_parents = cmd.output[0].split(' ')
-        if len(merge_revision_parents) > 1:
-            merge_revision = merge_revision_parents[1]
+        #cmd = shell('git show -s --pretty=format:"%%P" %s' % merge_revision)
+        #merge_revision_parents = cmd.output[0].split(' ')
+        #if len(merge_revision_parents) > 1:
+        #    merge_revision = merge_revision_parents[1]
 
         return pick_revision, starting_revision, merge_revision
 
@@ -139,9 +143,12 @@ class LocalRepo(Git):
         pick_revision, starting_revision, merge_revision = self.extract_recomb_data(recomb_data)
         fd, commit_message_filename = tempfile.mkstemp(prefix="recomb-", suffix=".yaml", text=True)
         os.close(fd)
+        main_source_name = recomb_data['sources']['main']['name']
+        patches_source_name = recomb_data['sources']['patches']['name']
+        branch = recomb_data['sources']['main']['branch']
         with open(commit_message_filename, 'w') as commit_message_file:
             # We have to be sure this is the first line in yaml document
-            commit_message_file.write("recombination: %s-%s/%s\n\n" % (recomb_data['sources']['main']['name'], recomb_data['sources']['patches']['name'], recomb_data['sources']['main']['branch']))
+            commit_message_file.write("Recombination: %s:%s-%s:%s/%s\n\n" % (main_source_name, pick_revision[:6], patches_source_name, merge_revision[:6], recomb_data['sources']['main']['branch']))
             yaml.safe_dump(recomb_data, commit_message_file, default_flow_style=False, indent=4, canonical=False, default_style=False)
 
         retry_merge = True
@@ -151,7 +158,9 @@ class LocalRepo(Git):
             shell('git checkout -B %s %s' % (recombination_branch, starting_revision))
 
             log.info("Creating remote disposable branch on replica")
-            shell('git push replica HEAD:%s' % recombination_branch)
+            cmd = shell('git push replica HEAD:%s' % recombination_branch)
+            if cmd.returncode != 0:
+                raise PushError
 
             cmd = shell("git merge --squash --no-commit %s %s" % (pick_revision, merge_revision))
 
@@ -168,18 +177,19 @@ class LocalRepo(Git):
                         shell('git push replica :%s' % recombination_branch)
                         log.error("Resolution failed. Exiting")
                         os.unlink(commit_message_filename)
-                        sys.exit(1)
+                        logsummary.error("Recombination attempt failed")
+                        raise ResolutionFailedError
                     else:
                         # reset, resolve, and retry
                         shell('git reset --hard %s' % recombination_branch)
-                        shell('git checkout %s' % pick_branch)
+                        shell('git checkout parking')
                         shell('git branch -D %s' % recombination_branch)
                         shell('git push replica :%s' % recombination_branch)
                 else:
                     shell('git push replica :%s' % recombination_branch)
                     os.unlink(commit_message_filename)
                     log.critical("Merge failed even after resolution. You're on your own, sorry. Exiting")
-                    sys.exit(1)
+                    raise MergeFailedError
             else:
                 retry_merge = False
 
@@ -191,6 +201,7 @@ class LocalRepo(Git):
         for line in cmd.output:
             if 'nothing to commit' in line:
                 shell("git commit --allow-empty -F %s" % (commit_message_filename))
+                logsummary.warning('Contents in commit %s have been merged twice in upstream' % pick_revision)
                 break
 
         os.unlink(commit_message_filename)
@@ -226,6 +237,27 @@ class LocalRepo(Git):
     def resolve_conflicts(self, output):
         return True
 
+    def fetch_recomb(self, fetch_dir, untested_recombs, remote_name):
+        dirlist = dict()
+        os.chdir(self.directory)
+        shell('git checkout parking')
+        if not untested_recombs:
+            return None
+        else:
+            for recomb in untested_recombs:
+                recomb_dir = "%s/%s" % (fetch_dir, recomb['number'])
+                try:
+                    os.makedirs(recomb_dir)
+                except OSError:
+                    pass
+                recomb_branch = 'remotes/%s/changes/%s/%s/%s' % (remote_name, recomb['number'][-2:], recomb['number'], recomb['currentPatchSet']['number'])
+                shell('git checkout %s' % recomb_branch)
+                shell('cp -a . %s' % recomb_dir)
+                shell('git checkout parking')
+                dirlist[recomb['number']] = recomb_dir
+        return dirlist
+
+
 
 class RemoteGit(Git):
 
@@ -236,9 +268,9 @@ class RemoteGit(Git):
         self.project_name = project_name
 
     def get_original_ids(self, commits):
-        ids = list()
+        ids = dict()
         for commit in commits:
-            ids.append(commit['hash'])
+            ids[commit['hash']] = commit['hash']
         return ids
 
 

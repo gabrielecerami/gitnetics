@@ -156,9 +156,7 @@ class Gerrit(object):
 
         return ids
 
-    def download_review(self, download_dir, recomb_id=None, branch=''):
-        # TODO: use refs/replica/changes already downloaded instead
-        dirlist = list()
+    def get_untested_recombs_infos(self, recomb_id=None, branch=''):
         if recomb_id:
             change_query = 'AND change:%s' % recomb_id
         else:
@@ -166,21 +164,7 @@ class Gerrit(object):
         query = "'owner:self AND project:%s %s AND branch:^recomb-.*-%s.* AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND NOT status:abandoned)'"  % (self.project_name, change_query, branch)
         untested_recombs = self.query_changes_json(query)
         log.debugvar('untested_recombs')
-        if not untested_recombs:
-            return None
-        else:
-            for recomb in untested_recombs:
-                recomb_dir = "%s/%s" % (download_dir, recomb['number'])
-                try:
-                    os.makedirs(recomb_dir)
-                except OSError:
-                    pass
-                ref = 'refs/changes/%s/%s/%s' % (recomb['number'][-2:], recomb['number'], recomb['currentPatchSet']['number'])
-                os.chdir(recomb_dir)
-                shell('git init')
-                shell('git pull %s %s' % (self.url, ref))
-                dirlist.append(recomb_dir)
-        return dirlist
+        return untested_recombs
 
     def get_approved_change_infos(self, branch):
         infos = dict()
