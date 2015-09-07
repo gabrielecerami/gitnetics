@@ -2,6 +2,7 @@ import sys
 import os
 import tempfile
 import yaml
+import shutil
 from shellcommand import shell
 from collections import OrderedDict
 from ..datastructures import Change
@@ -253,6 +254,7 @@ class LocalRepo(Git):
                 recomb_branch = 'remotes/%s/changes/%s/%s/%s' % (remote_name, recomb['number'][-2:], recomb['number'], recomb['currentPatchSet']['number'])
                 shell('git checkout %s' % recomb_branch)
                 shell('cp -a . %s' % recomb_dir)
+                shutil.rmtree("%s/.git" % recomb_dir, ignore_errors=True)
                 shell('git checkout parking')
                 dirlist[recomb['number']] = recomb_dir
         return dirlist

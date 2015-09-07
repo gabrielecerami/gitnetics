@@ -64,6 +64,7 @@ class Change(object):
         if result_change:
             self.number = result_change.number
             self.uuid = result_change.uuid
+            self.status = result_change.status
             log.info("Recombination with Change-Id %s uploaded in replica gerrit with number %s" % (self.uuid, self.number))
         else:
             return False
@@ -171,11 +172,6 @@ class Recombination(Change):
             log.debug("Merge check with master-patches successful, ready to create review")
         except AttemptError:
             raise AttemptError
-        try:
-            self.upload()
-        except UploadError:
-            log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
-            raise UploadError
 
     def sync_replica(self, replica_branch):
         if self.recomb_type == 'original-diversity':

@@ -94,7 +94,7 @@ class Gerrit(object):
         infos = {}
         infos['revision'] = gerrit_infos['currentPatchSet']['revision']
         infos['parent'] = gerrit_infos['currentPatchSet']['parents'][0]
-        infos['patchet_number'] = gerrit_infos['currentPatchSet']['number']
+        infos['patchset_number'] = gerrit_infos['currentPatchSet']['number']
         infos['patchset_revision'] = gerrit_infos['currentPatchSet']['revision']
         infos['project-name'] = gerrit_infos['project']
         infos['branch'] = gerrit_infos['branch']

@@ -218,7 +218,12 @@ class Project(object):
                     recombination.test()
                 except TestError:
                     log.error("Recombination attempt unsuccessful")
-                    return False
+                    raise UploadError
+                try:
+                    recombination.upload()
+                except UploadError:
+                    log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
+                    raise UploadError
 
         return True
 
@@ -272,9 +277,9 @@ class Project(object):
         return recombinations
 
     def get_recombination_by_patch_change(self, patches_change_id):
-        infos = self.replica_remote.get_changes_info([patches_change_id], search_field='topic', key_field='topic')
+        infos = self.patches_remote.get_changes_info([patches_change_id], search_field='topic', key_field='topic')
         if patches_change_id in infos:
-            recombination = Recombination(self.underlayer, 'replica-mutation', remote=self.recomb_remote, infos=infos[search_key])
+            recombination = Recombination(self.underlayer, 'replica-mutation', remote=self.recomb_remote, patches_remote=self.patches_remote, infos=infos[patches_change_id])
         else:
             recombination = Recombination(self.underlayer, 'replica-mutation', remote=self.recomb_remote)
             mutation_change = self.patches_remote.get_changes_by_id([patches_change_id])[patches_change_id]
@@ -285,8 +290,8 @@ class Project(object):
 
             change = Change(remote=self.replica_remote)
             change.branch = self.replica_branches['patches:' + patches_branch]
-            change.revision = self.underlayer.get_revision("remotes/replica/%s" % replica_branch)
-            change.parent = self.underlayer.get_revision("remotes/replica/%s~1" % replica_branch)
+            change.revision = self.underlayer.get_revision("remotes/replica/%s" % change.branch)
+            change.parent = self.underlayer.get_revision("remotes/replica/%s~1" % change.branch)
             change.uuid = change.revision
 
             recombination.replica_change = change
@@ -306,7 +311,13 @@ class Project(object):
                 if recombination.status == "MISSING":
                     recombination.test()
                     # log.error("Recombination attempt unsuccessful")
-                    recombination.upload()
+                    try:
+                        recombination.upload()
+                    except UploadError:
+                        log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
+                        raise UploadError
+                elif recombination.status == "APPROVED":
+                    log.warning("Master patches recombination approved as number %s and waiting for submission" % recombination.number)
                 else:
                     log.warning("Master patches recombination present as number %s and waiting for approval" % recombination.number)
 
