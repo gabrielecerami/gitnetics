@@ -127,8 +127,10 @@ class Recombination(Change):
             # Set real commit as revision
             self.original_change.revision = recomb_sources['main']['revision']
             self.diversity_change = self.underlayer.get_changes_by_id([recomb_sources['patches']['id']], branch=recomb_sources['patches']['branch'])[recomb_sources['patches']['id']]
-        if 'removed_commits' in recomb_sources['patches']:
-            self.removed_commits = recomb_sources['patches']['removed_commits']
+
+        if 'target-replacement-branch' not in recomb_data:
+            recomb_data['target-replacement-branch'] = re.sub('recomb', 'target', self.branch)
+        self.target_replacement_branch = recomb_data['target-replacement-branch']
 
         self.set_recomb_data()
 
@@ -163,8 +165,8 @@ class Recombination(Change):
                 }
             }
         }
-        if self.removed_commits:
-            self.recomb_data['sources']['patches']['removed_commits'] = removed_commits
+        if self.target_replacement_branch:
+            self.recomb_data['target-replacement-branch'] = self.target_replacement_branch
 
     def attempt(self):
         # patches_revision = self.project.get_revision(self.patches.revision)

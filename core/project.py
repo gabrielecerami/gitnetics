@@ -94,12 +94,9 @@ class Project(object):
             self.recombinations[replica_branch] = None
             self.commits[replica_branch] = {}
 
-    def update_target_branch(self, replica_branch, removed_commits):
+    def update_target_branch(self, recombination, replica_branch):
         target_branch = self.target_branches['replica:' + replica_branch]
-        patches_branch = self.patches_branches['replica:' + replica_branch]
-        if removed_commits:
-            self.underlayer.remove_commits(patches_branch, removed_commits, remote='replica')
-        self.underlayer.update_target_branch(replica_branch, patches_branch, target_branch)
+        self.underlayer.update_target_branch(recombination.target_replacement_branch, target_branch)
 
     def get_slices(self, recombinations):
         slices = {
@@ -176,7 +173,7 @@ class Project(object):
             recomb_id = list(recombinations)[segment['end'] - 1]
             recombination = recombinations[recomb_id]
             recombination.sync_replica(replica_branch)
-            self.update_target_branch(replica_branch, recombination.removed_commits)
+            self.update_target_branch(recombination, replica_branch)
 
         # Gerrit operations from approved changes
         # NOthing 'approved' can be merged if it has some "present" before in the history
@@ -199,7 +196,7 @@ class Project(object):
                     recombination.sync_replica(replica_branch)
                 except RecombinationSyncReplicaError:
                     log.error("Replica could not be synced")
-                self.update_target_branch(replica_branch, recombination.removed_commits)
+                self.update_target_branch(recombination, replica_branch)
                 try:
                     recombination.submit()
                 except RecombinationSubmitError:
@@ -265,6 +262,7 @@ class Project(object):
                     recombinations[recomb_id] = Recombination(self.underlayer, 'original-diversity', remote=self.recomb_remote)
                     recombinations[recomb_id].status = "MISSING"
                     recombinations[recomb_id].branch = "recomb-original-%s-%s" % (original_branch, original_changes[recomb_id].revision)
+                    recombinations[recomb_id].target_replacement_branch = "target-original-%s-%s" % (original_branch, original_changes[recomb_id].revision)
                     recombinations[recomb_id].topic = recomb_id
 
                     recombinations[recomb_id].original_change = original_changes[recomb_id]
@@ -299,6 +297,7 @@ class Project(object):
             recombination.replica_change = change
 
             recombination.branch = "recomb-patches-%s-%s" % (recombination.replica_change.branch, recombination.replica_change.revision)
+            recombination.target_replacement_branch = "target-patches-%s-%s" % (recombination.replica_change.branch, recombination.replica_change.revision)
             recombination.topic = patches_change_id
             recombination.status = "MISSING"
 
@@ -339,7 +338,7 @@ class Project(object):
                 log.error("Originating change approval failed")
             except RecombinationSubmitError:
                 log.error("Originating change submission failed")
-        self.update_target_branch(replica_branch, recombination.removed_commits)
+        self.update_target_branch(recombination, replica_branch)
         if recombination.status != "MERGED":
             recombination.submit()
         else:
@@ -378,13 +377,21 @@ class Project(object):
         log.info("Deleting recomb branches from mirror for project %s" % self.project_name)
         service_branches = self.underlayer.list_branches('replica-mirror', pattern='recomb*')
         self.underlayer.delete_remote_branches('replica-mirror', service_branches)
+        service_branches = self.underlayer.list_branches('replica-mirror', pattern='target-*')
+        self.underlayer.delete_remote_branches('replica-mirror', service_branches)
 
     def delete_stale_branches(self):
         recomb_active_branches = list()
         recomb_all_branches = self.underlayer.list_branches('replica', pattern='recomb*')
+        target_all_branches = self.underlayer.list_branches('replica', pattern='target-*')
+        # TODO
+        # recomb_all_branches = recomb_all_branches + target_all_branches
         infos = self.replica_remote.query_changes_json('"status:open AND project:%s"' % self.replica_project['name'])
         for info in infos:
             recomb_active_branches.append(info['branch'])
+            # TODO
+            #recomb_active_branches.append(info.target_replacement_branch)
+
         log.debugvar('recomb_active_branches')
         recomb_stale_branches = list(set(recomb_all_branches) - set(recomb_active_branches))
         log.debugvar('recomb_stale_branches')

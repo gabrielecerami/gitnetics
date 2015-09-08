@@ -1,13 +1,23 @@
+import difflib
+import hashlib
 import sys
 import os
 import tempfile
 import yaml
 import shutil
 from shellcommand import shell
-from collections import OrderedDict
 from ..datastructures import Change
 from gerrit import Gerrit
 from ..colorlog import log, logsummary
+
+class PushError(Exception):
+    pass
+
+class MergeError(Exception):
+    pass
+
+class RemoteFetchError(Exception):
+    pass
 
 class Git(object):
 
@@ -113,14 +123,12 @@ class LocalRepo(Git):
 
     def delete_branch(self, branch):
         shell('git checkout parking')
-        cmd = shell('git branch -D %s' % branch)
+        shell('git branch -D %s' % branch)
 
     def delete_remote_branches(self, remote_name, branches):
         for branch in branches:
             shell('git push %s :%s' % (remote_name,branch))
 
-    def resolve_conflicts(self, output):
-        pass
     def recombine(self, recomb_data, recombination_branch):
 
         shell('git fetch replica')
@@ -133,12 +141,13 @@ class LocalRepo(Git):
         merge_revision = recomb_data['sources']['patches']['revision']
         main_source_name = recomb_data['sources']['main']['name']
         patches_source_name = recomb_data['sources']['patches']['name']
-        branch = recomb_data['sources']['main']['branch']
+        main_branch = recomb_data['sources']['main']['branch']
         patches_branch = recomb_data['sources']['patches']['branch']
+        target_replacement_branch = recomb_data['target-replacement-branch']
 
         # Branch prep
         # local patches branch
-        shell('git checkout -B replica-%s-base %s' % patches_branch, merge_revision)
+        shell('git checkout -B recomb_attempt-%s-base %s' % (patches_branch, merge_revision))
         # local recomb branch
         shell('git checkout -B %s %s' % (recombination_branch, starting_revision))
         log.info("Creating remote disposable branch on replica")
@@ -147,24 +156,26 @@ class LocalRepo(Git):
             raise PushError
 
 
-        attempt_number = 1
-        theres_hope = True
         patches_removal_queue = list()
 
         merge = shell("git merge --stat --squash --no-commit %s %s" % (pick_revision, merge_revision))
 
-        if merge.returncode != 0
-            shell("firs attempt at merge failed")
+        if merge.returncode != 0:
+            attempt_number = 0
+            patches_base = dict()
+            removed_commits = list()
+            log.error("first attempt at merge failed")
             cmd = shell('git status --porcelain')
-            conflict_status = cmd.output
+            prev_conflict_status = cmd.output
             cmd = shell('git merge-base %s %s' % (pick_revision, merge_revision))
             ancestor = cmd.output[0]
             cmd = shell('git rev-list --reverse --first-parent %s..remotes/replica/%s' % (ancestor, recomb_data['sources']['patches']['branch']))
             patches_removal_queue = cmd.output
             for commit in cmd.output:
-                cmd = shell('git show --pretty=format:"" %s' % commit)
-                diff = cmd.output.joing('\n)
-                patches_commit[hashlib.sha1(diff)] = commit
+                cmd = shell('git show --pretty=format:"" %s' % commit, show_stdout=False )
+                diff = '\n'.join(cmd.output)
+                hash_object = hashlib.sha1(diff)
+                patches_base[hash_object.hexdigest()] = commit
             if patches_removal_queue:
                log.warning("attempting automatic resolution")
             else:
@@ -172,6 +183,8 @@ class LocalRepo(Git):
         else:
             log.info("Merge successful")
 
+
+        retry_branch = None
         while merge.returncode != 0 and patches_removal_queue:
             attempt_number += 1
 
@@ -179,12 +192,12 @@ class LocalRepo(Git):
 
             shell('git checkout recomb_attempt-%s-base' % patches_branch)
             retry_branch = 'recomb_attempt-%s-retry_%s' % (patches_branch, attempt_number)
-            shell('git checkout -b %s' % (retry_branch)
-            # Rebasing change all the commits hashes after "commit"
+            shell('git checkout -b %s' % (retry_branch))
+            # Rebasing changes all the commits hashes after "commit"
             next_patch_toremove = patches_removal_queue.pop(0)
             shell('git rebase -p --onto %s^ %s' % (next_patch_toremove, next_patch_toremove))
             cmd = shell('git rev-parse %s' % retry_branch)
-            retry_merge_revision = cmd.output
+            retry_merge_revision = cmd.output[0]
 
             shell('git checkout %s' % recombination_branch)
             merge = shell("git merge --stat --squash --no-commit %s %s" % (pick_revision, retry_merge_revision))
@@ -193,31 +206,42 @@ class LocalRepo(Git):
                 log.warning("automatic resolution attempt %d failed" % attempt_number)
                 cmd = shell('git status --porcelain')
                 conflict_status = cmd.output
-                if prev_conflict_status != conflict_status:
+                diff = difflib.Differ()
+                same_status = list(diff.compare(prev_conflict_status, conflict_status))
+                if not same_status:
                     removed_commits.append(next_patch_toremove)
                     # removing this patch did not solve everything, but did
                     # something nonetheless, keep it removed and try to remove
                     # something else too
                     # change the base, recalculate every patch commit hash since
                     # rebase changed everything
-                    shell('git branch -D replica-%s-base')
-                    shell('git checkout -B replica-%s-base %s' % patches_branch, retry_merge_revision)
+                    shell('git branch -D recomb_attempt-%s-base' % patches_branch)
+                    shell('git checkout -B recomb_attempt-%s-base %s' % patches_branch, retry_merge_revision)
                     cmd = shell('git rev-list --reverse --first-parent %s..%s' % (ancestor, retry_branch))
                     patches_removal_queue = cmd.output
+                    prev_conflict_status = conflict_status
+                shell('git branch -D %s' % retry_branch)
             else:
                 logsummary.warning("automatic resolution attempt %d succeeded" % attempt_number)
                 removed_commits.append(next_patch_toremove)
                 logsummary.info("removed commits")
                 logsummary.info(removed_commits)
                 logsummary.info("removed commits (commit hash relative to starting patches branch)")
-                logsummary.info(removed_commits_deashed)
+                logsummary.info('removed_commits_deashed')
+
 
         if merge.returncode != 0:
             logsummary.error("automatic resolution failed")
             shell('git push replica :%s' % recombination_branch)
         else:
-            logsummary("Recombination successful")
-            recomb_data['sources']['patches']['removed_commits'] = removed_commits
+            logsummary.info("Recombination successful")
+            # create new patches-branch
+            if retry_branch:
+                shell('git push replica :%s' % patches_branch)
+                shell('git push replica %s:refs/heads/%s' % (retry_branch, patches_branch))
+                shell('git branch -D %s' % retry_branch)
+            recomb_data['target-replacement-branch'] = target_replacement_branch
+
             fd, commit_message_filename = tempfile.mkstemp(prefix="recomb-", suffix=".yaml", text=True)
             os.close(fd)
             with open(commit_message_filename, 'w') as commit_message_file:
@@ -237,8 +261,16 @@ class LocalRepo(Git):
                     break
             os.unlink(commit_message_filename)
 
-        git checkout parking
-        git branch -D recombination branch
+            # Create target branch replacement for this recombination
+            shell('git checkout -B %s %s' % (target_replacement_branch, starting_revision))
+            cmd = shell("git merge --log --no-edit %s %s" % (pick_revision, retry_merge_revision))
+            if cmd.returncode == 0:
+                shell('git push replica HEAD:%s' % target_replacement_branch)
+
+        shell('git checkout parking')
+        #shell('git branch -D %s' % recombination_branch)
+        shell('git branch -D recomb_attempt-%s-base' % patches_branch)
+        shell('git branch -D %s' % target_replacement_branch)
 
     def remove_commits(self, branch, removed_commits, remote=''):
         shell('git branch --track %s%s %s' (remote, branch, branch))
@@ -273,15 +305,12 @@ class LocalRepo(Git):
         shell('git checkout parking')
         shell('git branch -D replica-%s' % replica_branch)
 
-    def update_target_branch(self, replica_branch, patches_branch, target_branch):
+    def update_target_branch(self, target_replacement_branch, target_branch):
         shell('git fetch replica')
-        shell('git checkout -B new-%s remotes/replica/%s' % (target_branch, replica_branch))
-        shell("git merge remotes/replica/%s" % (patches_branch))
-
+        shell('git branch remotes/replica/%s' % (target_replacement_branch))
         shell('git push -f replica HEAD:%s' % (target_branch))
-
         shell('git checkout parking')
-        shell('git branch -D new-%s' % target_branch)
+        shell('git push replica :%s ' % target_replacement_branch)
 
 
     def fetch_recomb(self, fetch_dir, untested_recombs, remote_name):
@@ -304,8 +333,6 @@ class LocalRepo(Git):
                 shell('git checkout parking')
                 dirlist[recomb['number']] = recomb_dir
         return dirlist
-
-
 
 class RemoteGit(Git):
 
