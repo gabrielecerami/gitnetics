@@ -94,9 +94,11 @@ class Project(object):
             self.recombinations[replica_branch] = None
             self.commits[replica_branch] = {}
 
-    def update_target_branch(self, replica_branch):
+    def update_target_branch(self, replica_branch, removed_commits):
         target_branch = self.target_branches['replica:' + replica_branch]
         patches_branch = self.patches_branches['replica:' + replica_branch]
+        if removed_commits:
+            self.underlayer.remove_commits(patches_branch, removed_commits, remote='replica')
         self.underlayer.update_target_branch(replica_branch, patches_branch, target_branch)
 
     def get_slices(self, recombinations):
@@ -174,7 +176,7 @@ class Project(object):
             recomb_id = list(recombinations)[segment['end'] - 1]
             recombination = recombinations[recomb_id]
             recombination.sync_replica(replica_branch)
-            self.update_target_branch(replica_branch)
+            self.update_target_branch(replica_branch, recombination.removed_commits)
 
         # Gerrit operations from approved changes
         # NOthing 'approved' can be merged if it has some "present" before in the history
@@ -197,7 +199,7 @@ class Project(object):
                     recombination.sync_replica(replica_branch)
                 except RecombinationSyncReplicaError:
                     log.error("Replica could not be synced")
-                self.update_target_branch(replica_branch)
+                self.update_target_branch(replica_branch, recombination.removed_commits)
                 try:
                     recombination.submit()
                 except RecombinationSubmitError:
@@ -337,7 +339,7 @@ class Project(object):
                 log.error("Originating change approval failed")
             except RecombinationSubmitError:
                 log.error("Originating change submission failed")
-        self.update_target_branch(replica_branch)
+        self.update_target_branch(replica_branch, recombination.removed_commits)
         if recombination.status != "MERGED":
             recombination.submit()
         else:
