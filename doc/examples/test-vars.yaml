@@ -1,0 +1,50 @@
+---
+recombination_dir: puppet-keystone/245327/code
+recombination_id: '245327'
+target-project: puppet-keystone
+tests:
+    puppet-ceilometer:
+        types:
+            stability: puppet-keystone/245327/results/stability/puppet-ceilometer_results.xml
+            upstream: puppet-keystone/245327/results/upstream/puppet-ceilometer_results.xml
+    puppet-glance:
+        types:
+            stability: puppet-keystone/245327/results/stability/puppet-glance_results.xml
+            upstream: puppet-keystone/245327/results/upstream/puppet-glance_results.xml
+    puppet-gnocchi:
+        types:
+            stability: puppet-keystone/245327/results/stability/puppet-gnocchi_results.xml
+            upstream: puppet-keystone/245327/results/upstream/puppet-gnocchi_results.xml
+    puppet-heat:
+        types:
+            stability: puppet-keystone/245327/results/stability/puppet-heat_results.xml
+            upstream: puppet-keystone/245327/results/upstream/puppet-heat_results.xml
+    puppet-ironic:
+        types:
+            stability: puppet-keystone/245327/results/stability/puppet-ironic_results.xml
+            upstream: puppet-keystone/245327/results/upstream/puppet-ironic_results.xml
+    puppet-keystone:
+        types:
+            stability: puppet-keystone/245327/results/stability/puppet-keystone_results.xml
+            upstream: puppet-keystone/245327/results/upstream/puppet-keystone_results.xml
+    puppet-manila:
+        types:
+            stability: puppet-keystone/245327/results/stability/puppet-manila_results.xml
+            upstream: puppet-keystone/245327/results/upstream/puppet-manila_results.xml
+    puppet-neutron:
+        types:
+            stability: puppet-keystone/245327/results/stability/puppet-neutron_results.xml
+            upstream: puppet-keystone/245327/results/upstream/puppet-neutron_results.xml
+    puppet-nova:
+        types:
+            stability: puppet-keystone/245327/results/stability/puppet-nova_results.xml
+            upstream: puppet-keystone/245327/results/upstream/puppet-nova_results.xml
+    puppet-swift:
+        types:
+            stability: puppet-keystone/245327/results/stability/puppet-swift_results.xml
+            upstream: puppet-keystone/245327/results/upstream/puppet-swift_results.xml
+    puppet-trove:
+        types:
+            stability: puppet-keystone/245327/results/stability/puppet-trove_results.xml
+            upstream: puppet-keystone/245327/results/upstream/puppet-trove_results.xml
+

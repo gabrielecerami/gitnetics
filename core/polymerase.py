@@ -1,15 +1,27 @@
 import copy
-import shutil
 from colorlog import log, logsummary
 from project import Project
 
 
 class Polymerase(object):
 
-    def __init__(self, projects_conf, base_dir, filter_projects=None, filter_method=None, filter_branches=None):
+    def __init__(self, projects_conf, base_dir, filter_projects=None, filter_method=None, filter_branches=None, fetch=True):
         self.projects = dict()
         self.projects_conf = projects_conf
         self.base_dir = base_dir
+        # extract reverse dependencies
+        for project in self.projects_conf:
+            self.projects_conf[project]["rev-deps"] = {}
+        for project in self.projects_conf:
+            for test_dep in self.projects_conf[project]["test-deps"]:
+                rev_dep = {
+                    project : {
+                    "tags" :self.projects_conf[project]["test-deps"][test_dep],
+                    "tests":self.projects_conf[project]["replica"]["tests"]
+                    }
+                }
+                self.projects_conf[test_dep]["rev-deps"].update(rev_dep)
+
         # restrict project to operate on
         projects = copy.deepcopy(projects_conf)
         project_list = list(projects)
@@ -47,7 +59,7 @@ class Polymerase(object):
 
         for project_name in projects:
             try:
-                self.projects[project_name] = Project(project_name, projects[project_name], self.base_dir + "/"+ project_name)
+                self.projects[project_name] = Project(project_name, projects[project_name], self.base_dir + "/"+ project_name, fetch=fetch)
                 logsummary.info("Project: %s initialized" % project_name)
             except Exception, e:
                 log.error(e)
@@ -77,22 +89,32 @@ class Polymerase(object):
                     success = False
         return success
 
-    def fetch_untested_recombinations(self, fetch_dir, recomb_id=None):
+    def prepare_tests(self, tests_basedir, recomb_id=None):
         logsummary.info('Fetching untested recombinations')
         tester_vars = dict()
         tester_vars['projects_conf'] = { 'projects': self.projects_conf }
-        shutil.rmtree(fetch_dir, ignore_errors=True)
         for project_name in self.projects:
             logsummary.info('Project: %s' % project_name)
             project = self.projects[project_name]
             log.debugvar('recomb_id')
-            try:
-                changes_infos = project.fetch_untested_recombinations(fetch_dir, recomb_id=recomb_id)
-                for change_number in changes_infos:
-                    tester_vars[change_number] = changes_infos[change_number]
-            except Exception, e:
-                logsummary.info("Problem with project %s: %s. Skipping" % (project_name, e))
+            #try:
+            changes_infos = project.fetch_untested_recombinations(tests_basedir, recomb_id=recomb_id)
+            for change_number in changes_infos:
+                tester_vars[change_number] = changes_infos[change_number]
+           # except Exception, e:
+            #    logsummary.info("Problem with project %s: %s. Skipping" % (project_name, e))
         return tester_vars
+
+    def vote_recombinations(self, test_results, recomb_id=None):
+        for target_project in test_results:
+            if target_project in self.projects:
+                project = self.projects[target_project]
+                project_test_results = test_results[target_project]
+                if recomb_id != None:
+                    if recomb_id in project_test_results:
+                        project.vote_recombinations(project_test_results, recomb_id=recomb_id)
+                else:
+                    project.vote_recombinations(project_test_results)
 
     def check_approved_recombinations(self, project_name=None, recomb_id=None):
         success = True

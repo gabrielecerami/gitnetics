@@ -1,13 +1,10 @@
 import pprint
 import re
-import sys
-import yaml
 import copy
 from colorlog import log, logsummary
 from collections import OrderedDict
 from datastructures import Change, Recombination
-from repotypes.git import LocalRepo, Git, RemoteGit
-from repotypes.gerrit import Gerrit
+from repotypes.git import LocalRepo
 
 class TestError(Exception):
     pass
@@ -28,7 +25,7 @@ class Project(object):
         "MISSING": 0
     }
 
-    def __init__(self, project_name, project_info, local_dir):
+    def __init__(self, project_name, project_info, local_dir, fetch=True):
         self.project_name = project_name
         self.recombinations = dict()
         self.commits = dict()
@@ -37,6 +34,12 @@ class Project(object):
         self.original_project = project_info['original']
         self.replica_project = project_info['replica']
         self.deploy_name = project_info['deploy-name']
+        self.rev_deps = None
+        if 'rev-deps' in project_info:
+            self.rev_deps = project_info['rev-deps']
+        self.test_types = project_info["replica"]["tests"]
+        self.test_minimum_score = 0
+
         if 'revision_lock' in self.replica_project:
             for branch in self.replica_project['revision_lock']:
                 # no advancement will be performed past this revision on this branch
@@ -46,21 +49,21 @@ class Project(object):
         self.underlayer = LocalRepo(project_name, local_dir)
 
         # Set up remotes
-        self.underlayer.add_gerrit_remote('replica', self.replica_project['location'], self.replica_project['name'])
+        self.underlayer.add_gerrit_remote('replica', self.replica_project['location'], self.replica_project['name'], fetch=fetch)
 
         self.replica_remote = self.underlayer.remotes['replica']
 
         if self.original_project['type'] == 'gerrit':
-            self.underlayer.add_gerrit_remote('original', self.original_project['location'], self.original_project['name'])
+            self.underlayer.add_gerrit_remote('original', self.original_project['location'], self.original_project['name'], fetch=fetch)
 
         elif self.original_project['type'] == 'git':
-            self.underlayer.add_git_remote('original', self.original_project['location'], self.original_project['name'])
+            self.underlayer.add_git_remote('original', self.original_project['location'], self.original_project['name'], fetch=fetch)
 
         self.original_remote = self.underlayer.remotes['original']
         self.recomb_remote = self.replica_remote
         self.patches_remote = self.replica_remote
 
-        self.underlayer.add_git_remote('replica-mirror', 'github', self.replica_project['name'])
+        self.underlayer.add_git_remote('replica-mirror', 'github', self.replica_project['name'],fetch=fetch)
 
 
         # Set up branches hypermap
@@ -359,18 +362,65 @@ class Project(object):
                 self.scan_patches_branch(branch)
                 self.scan_original_distance(branch)
 
-    def fetch_untested_recombinations(self, fetch_dir, recomb_id=None):
-        untested_recombs = self.recomb_remote.get_untested_recombs_infos(recomb_id=recomb_id)
-        dirlist = self.underlayer.fetch_recomb(fetch_dir, untested_recombs, self.recomb_remote.name)
+    def get_reverse_dependencies(self, tags=[]):
+        rev_deps = dict()
+        for project in self.rev_deps:
+            for tag in tags:
+                if tag in self.rev_deps[project]["tags"]:
+                    rev_deps[project] = self.rev_deps[project]["tests"]
+                    break
+        return rev_deps
+
+    def fetch_untested_recombinations(self, test_basedir, recomb_id=None):
         changes_infos = dict()
-        if dirlist:
-            for change_number in dirlist:
-                project_shortname = re.sub('puppet-','', self.project_name)
-                changes_infos[change_number] = ({ 'project_name': self.project_name, 'project_shortname': project_shortname, 'recombination_dir': dirlist[change_number]})
-                logsummary.info("Fetched recombination %s on dir %s" % (change_number, dirlist[change_number]))
-        else:
+        untested_recombs = self.recomb_remote.get_untested_recombs_infos(recomb_id=recomb_id)
+        if not untested_recombs:
+            dirlist =dict()
             logsummary.info("Project '%s': no untested recombinations" % self.project_name)
+        else:
+            dirlist = self.underlayer.fetch_recomb(test_basedir, untested_recombs, self.recomb_remote.name)
+        for change_number in dirlist:
+            tests = dict()
+            projects = self.get_reverse_dependencies(tags=['included','contained','required','classes', 'functions'])
+            projects[self.project_name] = self.test_types
+            for name in projects:
+                tests[name] = dict()
+                tests[name]["types"] = dict()
+                for test_type in projects[name]:
+                    result_file = "%s/%s/results/%s/%s_results.xml" % (self.project_name, change_number, test_type, name)
+                    tests[name]["types"][test_type] = result_file
+            changes_infos[change_number] = {
+                "target_project" : self.project_name,
+                'recombination_dir': dirlist[change_number],
+                "recombination_id" : change_number,
+                "tests": tests ,
+            }
+            logsummary.info("Fetched recombination %s on dir %s" % (change_number, dirlist[change_number]))
         return changes_infos
+
+    def get_test_score(self, test_results):
+        for project_name in test_results:
+            for test_type in test_results[project_name]:
+                test_output = test_results[project_name][test_type]
+                if test_output is None:
+                    return (0, "missing test results")
+        return (100, None)
+
+    def vote_recombinations(self, test_results, recomb_id=None):
+        if recomb_id:
+            recombs = [recomb_id]
+        else:
+            recombs = [recomb for recomb in test_results]
+
+        for recomb_id in recombs:
+            recomb = self.recomb_remote.get_changes_by_id([recomb_id], key_field='number')[recomb_id]
+            test_score, test_analysis = self.get_test_score(test_results[recomb_id])
+            if test_score > self.test_minimum_score:
+                recomb.approve()
+                logsummary.info("Recombination %s Approved" % recomb_id)
+            else:
+                recomb.reject()
+                logsummary.info("Recombination %s Rejected: %s" % (recomb_id, test_analysis))
 
     def delete_service_branches(self):
         # cleanup github repos from recomb branches WIP

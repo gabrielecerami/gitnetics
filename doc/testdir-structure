@@ -1,0 +1,10 @@
+# Test dir directory structure created by gitnetics prepare-tests
+
+# contains the projects.yaml dict modified for the use with khaleesi
+tests/project-var.yml
+# contains variables pertaining a certain recombination to test
+tests/<project_name>/<recomb_id>/vars.yaml
+# result files for every project (target and dependencies) tested in the recombination
+tests/<project_name>/<recomb_id>/results/<test_type>/<project_name>.yaml
+# contains the recombination to test
+tests/<project_name>/<recomb_id>/code

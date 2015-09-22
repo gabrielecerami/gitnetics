@@ -59,6 +59,9 @@ class Change(object):
     def approve(self):
         return self.remote.approve_change(self.number, self.patchset_number)
 
+    def reject(self):
+        return self.remote.reject_change(self.number, self.patchset_number)
+
     def upload(self):
         result_change = self.remote.upload_change(self.branch, self.topic)
         if result_change:
