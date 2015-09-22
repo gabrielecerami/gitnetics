@@ -37,7 +37,7 @@ def parse_args(parser):
     parser_fetch_untested_recombinations.add_argument('-v','--var-file', dest='var_file', type=argparse.FileType('w'), required=True, help='path to the file to be generated')
     parser_fetch_untested_recombinations.add_argument('-t','--tests-info-dir', dest='tests_info_dir', action='store', required=True, help='path to the file to be generated')
     parser_fetch_untested_recombinations.add_argument('-r','--recombination-id', dest='recomb_id', action='store', help='change id to handle')
-    parser_fetch_untested_recombinations.add_argument('-w','--fetch-dir', dest='fetch_dir', action='store', help='change id to handle')
+    parser_fetch_untested_recombinations.add_argument('-w','--fetch-dir', dest='fetch_dir', action='store', required=True, help='change id to handle')
 
     parser_cleanup = subparsers.add_parser('cleanup')
 
@@ -74,6 +74,9 @@ if __name__=="__main__":
             info_file_name = '%s/%s.yaml' % (args.tests_info_dir, change_number)
             with open(info_file_name, 'w') as change_file:
                 dump(tester_vars[change_number], change_file)
+
+    if args.command == 'vote-recombinations':
+        gitnetic.vote_recombinations()
 
     elif args.command == 'poll-replica':
         gitnetic.poll_replica(patches_change_id=args.change_id)

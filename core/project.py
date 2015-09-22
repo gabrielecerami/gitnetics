@@ -1,13 +1,10 @@
 import pprint
 import re
-import sys
-import yaml
 import copy
 from colorlog import log, logsummary
 from collections import OrderedDict
 from datastructures import Change, Recombination
-from repotypes.git import LocalRepo, Git, RemoteGit
-from repotypes.gerrit import Gerrit
+from repotypes.git import LocalRepo
 
 class TestError(Exception):
     pass
@@ -37,6 +34,10 @@ class Project(object):
         self.original_project = project_info['original']
         self.replica_project = project_info['replica']
         self.deploy_name = project_info['deploy-name']
+        self.rev_deps = None
+        if 'rev-deps' in project_info:
+            self.rev_deps = project_info['rev-deps']
+
         if 'revision_lock' in self.replica_project:
             for branch in self.replica_project['revision_lock']:
                 # no advancement will be performed past this revision on this branch
@@ -359,14 +360,27 @@ class Project(object):
                 self.scan_patches_branch(branch)
                 self.scan_original_distance(branch)
 
+    def get_reverse_dependencies(self, tags=[]):
+        rev_deps = list()
+        for project in self.rev_deps:
+            for tag in tags:
+                if tag in self.rev_deps[project]:
+                    rev_deps.append(project)
+        return rev_deps
+
     def fetch_untested_recombinations(self, fetch_dir, recomb_id=None):
         untested_recombs = self.recomb_remote.get_untested_recombs_infos(recomb_id=recomb_id)
         dirlist = self.underlayer.fetch_recomb(fetch_dir, untested_recombs, self.recomb_remote.name)
         changes_infos = dict()
         if dirlist:
             for change_number in dirlist:
-                project_shortname = re.sub('puppet-','', self.project_name)
-                changes_infos[change_number] = ({ 'project_name': self.project_name, 'project_shortname': project_shortname, 'recombination_dir': dirlist[change_number]})
+                tests = dict()
+                projects = self.get_reverse_dependencies(tags=['included','contained','required','classes', 'functions'])
+                projects.append(self.project_name)
+                for name in projects:
+                    project_shortname = re.sub('puppet-','', name)
+                    tests[name] = project_shortname
+                    changes_infos[change_number] = {'recombination_dir': dirlist[change_number], "tests": tests }
                 logsummary.info("Fetched recombination %s on dir %s" % (change_number, dirlist[change_number]))
         else:
             logsummary.info("Project '%s': no untested recombinations" % self.project_name)

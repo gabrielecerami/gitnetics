@@ -10,6 +10,16 @@ class Polymerase(object):
         self.projects = dict()
         self.projects_conf = projects_conf
         self.base_dir = base_dir
+        # extract reverse dependencies
+        for project in self.projects_conf:
+            self.projects_conf[project]["rev-deps"] = {}
+        for project in self.projects_conf:
+            for test_dep in self.projects_conf[project]["test-deps"]:
+                rev_dep = {
+                    project : self.projects_conf[project]["test-deps"][test_dep]
+                    }
+                self.projects_conf[test_dep]["rev-deps"].update(rev_dep)
+
         # restrict project to operate on
         projects = copy.deepcopy(projects_conf)
         project_list = list(projects)
