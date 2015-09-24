@@ -3,15 +3,17 @@ import sys
 import re
 import argparse
 import os
-from core.colorlog import log
+from core.colorlog import log,logsummary
 from core.polymerase import Polymerase
+import xml.etree.ElementTree as ET
 
 
 def projectname(project_name):
     return re.sub('.*/', '', project_name)
 
-def dump(data, fd):
-    yaml.safe_dump(data, stream=fd, explicit_start=True, default_flow_style=False, indent=4, canonical=False, default_style=False)
+def dump(data, path):
+    with open(path, "w") as dump_file:
+        yaml.safe_dump(data, stream=dump_file, explicit_start=True, default_flow_style=False, indent=4, canonical=False, default_style=False)
 
 
 def parse_args(parser):
@@ -21,6 +23,7 @@ def parse_args(parser):
     parser.add_argument('--projects','-p', dest='projects', action='store', type=projectname, help='comma separated list of project')
     parser.add_argument('-m', '--watch-method', dest='watch_method', action='store', help='upstream branch to consider')
     parser.add_argument('-w', '--watch-branches', dest='watch_branches', action='store', help='upstream branch to consider')
+    parser.add_argument('--no-fetch', dest='fetch', action='store_false', help='upstream branch to consider')
 
     subparsers = parser.add_subparsers(dest='command')
 
@@ -33,13 +36,15 @@ def parse_args(parser):
     parser_new_original_change = subparsers.add_parser('poll-original')
     parser_new_original_change.add_argument('-b', '--original-branch', dest='original_branch', action='store',  help='upstream branch to consider')
 
-    parser_fetch_untested_recombinations = subparsers.add_parser('fetch-untested-recombinations')
-    parser_fetch_untested_recombinations.add_argument('-v','--var-file', dest='var_file', type=argparse.FileType('w'), required=True, help='path to the file to be generated')
-    parser_fetch_untested_recombinations.add_argument('-t','--tests-info-dir', dest='tests_info_dir', action='store', required=True, help='path to the file to be generated')
-    parser_fetch_untested_recombinations.add_argument('-r','--recombination-id', dest='recomb_id', action='store', help='change id to handle')
-    parser_fetch_untested_recombinations.add_argument('-w','--fetch-dir', dest='fetch_dir', action='store', required=True, help='change id to handle')
+    parser_prepare_tests = subparsers.add_parser('prepare-tests')
+    parser_prepare_tests.add_argument('-t','--tests-base-dir', dest='tests_basedir', action='store', required=True, help='path to the file to be generated')
+    parser_prepare_tests.add_argument('-r','--recombination-id', dest='recomb_id', action='store', help='change id to handle')
 
     parser_cleanup = subparsers.add_parser('cleanup')
+
+    parser_vote_recombinations = subparsers.add_parser('vote-recombinations', help='Vote on Recombinations', description='poll replica')
+    parser_vote_recombinations.add_argument('-r','--recombination-id', dest='recomb_id', action='store', help='change id to handle')
+    parser_vote_recombinations.add_argument('-t','--tests-base-dir', dest='tests_basedir', action='store', required=True, help='path to the file to be generated')
 
     args = parser.parse_args()
 
@@ -55,28 +60,52 @@ if __name__=="__main__":
 
     projects = yaml.load(args.projects_path.read())
     try:
-        gitnetic = Polymerase(projects, args.base_dir, filter_projects=args.projects, filter_method=args.watch_method, filter_branches=args.watch_branches)
+        gitnetic = Polymerase(projects, args.base_dir, filter_projects=args.projects, filter_method=args.watch_method, filter_branches=args.watch_branches, fetch=args.fetch)
     except ValueError:
         log.critical('No projects to handle')
         sys.exit(1)
 
     ## actions
 
-    if args.command == 'fetch-untested-recombinations':
-        tester_vars = gitnetic.fetch_untested_recombinations(args.fetch_dir, recomb_id=args.recomb_id)
-        projects_info = tester_vars.pop('projects_conf')
-        dump(projects_info, args.var_file)
+    if args.command == 'prepare-tests':
         try:
-            os.makedirs(args.tests_info_dir)
+            os.makedirs(args.tests_basedir)
         except OSError:
             pass
+        tester_vars = gitnetic.prepare_tests(args.tests_basedir, recomb_id=args.recomb_id)
+        projects_info = tester_vars.pop('projects_conf')
+        project_vars_path = "%s/project-vars.yaml" % (args.tests_basedir)
+        dump(projects_info, project_vars_path)
+        log.info("Written projects infos in %s" % (project_vars_path))
         for change_number in tester_vars:
-            info_file_name = '%s/%s.yaml' % (args.tests_info_dir, change_number)
-            with open(info_file_name, 'w') as change_file:
-                dump(tester_vars[change_number], change_file)
+            target_project = tester_vars[change_number]["target-project"]
+            info_file_name = '%s/%s/%s/vars.yaml' % (args.tests_basedir, target_project, change_number)
+            dump(tester_vars[change_number], info_file_name)
+            log.info("Written test info for recombination %s in %s" % (change_number, info_file_name))
 
     if args.command == 'vote-recombinations':
-        gitnetic.vote_recombinations()
+        test_results = dict()
+        for root, dirs, files in os.walk(args.tests_basedir):
+            if 'vars.yaml' in files:
+                with open(os.path.join(root, "vars.yaml")) as var_file:
+                    test_vars = yaml.load(var_file)
+                target_project = test_vars['target-project']
+                try:
+                    exists = test_results[target_project]
+                except KeyError:
+                    test_results[target_project] = dict()
+                recombination_id = test_vars['recombination_id']
+                test_results[target_project][recombination_id] = dict()
+                for project_name in test_vars['tests']:
+                    test_results[target_project][recombination_id][project_name] = dict()
+                    for test_type in test_vars['tests'][project_name]["types"]:
+                        # TODO: I'm not really gathering any results here
+                        test_results[target_project][recombination_id][project_name][test_type] = None
+        log.debugvar('test_results')
+        if test_results:
+            gitnetic.vote_recombinations(test_results, recomb_id=args.recomb_id)
+        else:
+            logsummary.info("No test results to vote")
 
     elif args.command == 'poll-replica':
         gitnetic.poll_replica(patches_change_id=args.change_id)
@@ -89,3 +118,8 @@ if __name__=="__main__":
 
     elif args.command == 'cleanup':
         gitnetic.janitor()
+
+# tests/project-var.yml
+# tests/<project_name>/<recomb_id>/vars.yaml
+# tests/<project_name>/<recomb_id>/results/<test_type>/<project_name>.yaml
+# tests/<project_name>/<recomb_id>/code

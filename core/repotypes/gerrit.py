@@ -33,6 +33,9 @@ class Gerrit(object):
     def approve_change(self, number, patchset):
         shell('ssh %s gerrit review --code-review 2 --verified 1 %s,%s' % (self.host, number, patchset))
 
+    def reject_change(self, number, patchset):
+        shell('ssh %s gerrit review --code-review -2 --verified -1 %s,%s' % (self.host, number, patchset))
+
     def submit_change(self, number, patchset):
         shell('ssh %s gerrit review --publish --project %s %s,%s' % (self.host, self.project_name, number, patchset))
         shell('ssh %s gerrit review --submit --project %s %s,%s' % (self.host, self.project_name, number, patchset))

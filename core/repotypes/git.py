@@ -94,24 +94,29 @@ class LocalRepo(Git):
             shell('git commit --allow-empty -a -m "parking"')
 
 
-    def addremote(self, name, url):
+    def addremote(self, name, url, fetch=True):
         os.chdir(self.directory)
         cmd = shell('git remote | grep ^%s$' % name)
         if cmd.returncode != 0:
             shell('git remote add %s %s' % (name, url))
-        cmd = shell('git fetch %s' % (name))
-        if cmd.returncode != 0:
-            raise RemoteFetchError
+        if fetch:
+            cmd = shell('git fetch %s' % (name))
+            if cmd.returncode != 0:
+                raise RemoteFetchError
 
-    def add_gerrit_remote(self, name, location, project_name):
+    def add_gerrit_remote(self, name, location, project_name, fetch=True):
         self.remotes[name] = Gerrit(name, location, project_name)
-        self.addremote(name, self.remotes[name].url)
-        shell('git fetch %s +refs/changes/*:refs/remotes/%s/changes/*' % (name, name))
-        shell('scp -p %s:hooks/commit-msg .git/hooks/' % location)
+        self.addremote(name, self.remotes[name].url, fetch=fetch)
+        if fetch:
+            shell('git fetch %s +refs/changes/*:refs/remotes/%s/changes/*' % (name, name))
+        try:
+            os.stat(".git/hooks/commit-msg")
+        except OSError:
+            shell('scp -p %s:hooks/commit-msg .git/hooks/' % location)
 
-    def add_git_remote(self, name, location, project_name):
+    def add_git_remote(self, name, location, project_name, fetch=True):
         self.remotes[name] = RemoteGit(name, location, self.directory, project_name)
-        self.addremote(name, self.remotes[name].url)
+        self.addremote(name, self.remotes[name].url, fetch=fetch)
 
     def list_branches(self, remote_name, pattern=''):
         cmd = shell('git for-each-ref --format="%%(refname)" refs/remotes/%s/%s | sed -e "s/refs\/remotes\/%s\///"' % (remote_name, pattern, remote_name))
@@ -312,26 +317,19 @@ class LocalRepo(Git):
         shell('git checkout parking')
         shell('git push replica :%s ' % target_replacement_branch)
 
-
-    def fetch_recomb(self, fetch_dir, untested_recombs, remote_name):
+    def fetch_recomb(self, test_basedir, untested_recombs, remote_name):
         dirlist = dict()
         os.chdir(self.directory)
+        change_dir = os.getcwd()
         shell('git checkout parking')
-        if not untested_recombs:
-            return None
-        else:
-            for recomb in untested_recombs:
-                recomb_dir = "%s/%s" % (fetch_dir, recomb['number'])
-                try:
-                    os.makedirs(recomb_dir)
-                except OSError:
-                    pass
-                recomb_branch = 'remotes/%s/changes/%s/%s/%s' % (remote_name, recomb['number'][-2:], recomb['number'], recomb['currentPatchSet']['number'])
-                shell('git checkout %s' % recomb_branch)
-                shell('cp -a . %s' % recomb_dir)
-                shutil.rmtree("%s/.git" % recomb_dir, ignore_errors=True)
-                shell('git checkout parking')
-                dirlist[recomb['number']] = recomb_dir
+        for recomb in untested_recombs:
+            recomb_dir = "%s/%s/code" % (self.project_name, recomb['number'])
+            recomb_branch = 'remotes/%s/changes/%s/%s/%s' % (remote_name, recomb['number'][-2:], recomb['number'], recomb['currentPatchSet']['number'])
+            shell('git checkout %s' % recomb_branch)
+            shutil.rmtree(test_basedir + "/" + recomb_dir, ignore_errors=True)
+            shutil.copytree(change_dir, test_basedir + "/" + recomb_dir, ignore=shutil.ignore_patterns('.git*'))
+            shell('git checkout parking')
+            dirlist[recomb['number']] = recomb_dir
         return dirlist
 
 class RemoteGit(Git):
