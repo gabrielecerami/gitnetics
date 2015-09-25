@@ -78,7 +78,7 @@ if __name__=="__main__":
         dump(projects_info, project_vars_path)
         log.info("Written projects infos in %s" % (project_vars_path))
         for change_number in tester_vars:
-            target_project = tester_vars[change_number]["target-project"]
+            target_project = tester_vars[change_number]["target_project"]
             info_file_name = '%s/%s/%s/vars.yaml' % (args.tests_basedir, target_project, change_number)
             dump(tester_vars[change_number], info_file_name)
             log.info("Written test info for recombination %s in %s" % (change_number, info_file_name))
@@ -89,7 +89,7 @@ if __name__=="__main__":
             if 'vars.yaml' in files:
                 with open(os.path.join(root, "vars.yaml")) as var_file:
                     test_vars = yaml.load(var_file)
-                target_project = test_vars['target-project']
+                target_project = test_vars['target_project']
                 try:
                     exists = test_results[target_project]
                 except KeyError:
