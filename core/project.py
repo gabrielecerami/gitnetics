@@ -385,15 +385,12 @@ class Project(object):
             projects[self.project_name] = self.test_types
             for name in projects:
                 tests[name] = dict()
-                spec_name = re.sub('puppet-','', name)
-                spec_name = re.sub('puppetlabs-','', spec_name)
-                tests[name]["spec_name"] = spec_name
                 tests[name]["types"] = dict()
                 for test_type in projects[name]:
                     result_file = "%s/%s/results/%s/%s_results.xml" % (self.project_name, change_number, test_type, name)
                     tests[name]["types"][test_type] = result_file
             changes_infos[change_number] = {
-                "target-project" : self.project_name,
+                "target_project" : self.project_name,
                 'recombination_dir': dirlist[change_number],
                 "recombination_id" : change_number,
                 "tests": tests ,
