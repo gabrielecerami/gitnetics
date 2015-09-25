@@ -102,7 +102,7 @@ if __name__=="__main__":
                         test_results_file = test_vars['tests'][project_name]["types"][test_type]
                         try:
                             os.stat(args.tests_basedir + "/" + test_results_file)
-                           test_results[target_project][recombination_id][project_name][test_type] = []
+                            test_results[target_project][recombination_id][project_name][test_type] = []
                             # TODO: load test results from xml format
                         except OSError:
                            test_results[target_project][recombination_id][project_name][test_type] = None
@@ -124,8 +124,3 @@ if __name__=="__main__":
 
     elif args.command == 'cleanup':
         gitnetic.janitor()
-
-# tests/project-var.yml
-# tests/<project_name>/<recomb_id>/vars.yaml
-# tests/<project_name>/<recomb_id>/results/<test_type>/<project_name>.yaml
-# tests/<project_name>/<recomb_id>/code
