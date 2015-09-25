@@ -99,8 +99,14 @@ if __name__=="__main__":
                 for project_name in test_vars['tests']:
                     test_results[target_project][recombination_id][project_name] = dict()
                     for test_type in test_vars['tests'][project_name]["types"]:
-                        # TODO: I'm not really gathering any results here
-                        test_results[target_project][recombination_id][project_name][test_type] = None
+                        test_results_file = test_vars['tests'][project_name]["types"][test_type]
+                        try:
+                            os.stat(args.tests_basedir + "/" + test_results_file)
+                           test_results[target_project][recombination_id][project_name][test_type] = []
+                            # TODO: load test results from xml format
+                        except OSError:
+                           test_results[target_project][recombination_id][project_name][test_type] = None
+                           logsummary.error("Recombination id: %s , mIssing test result file %s" % (recombination_id, test_results_file))
         log.debugvar('test_results')
         if test_results:
             gitnetic.vote_recombinations(test_results, recomb_id=args.recomb_id)

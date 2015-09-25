@@ -402,6 +402,8 @@ class Project(object):
         for project_name in test_results:
             for test_type in test_results[project_name]:
                 test_output = test_results[project_name][test_type]
+                if test_output is None:
+                    return (0, "missing test results")
         return (100, None)
 
     def vote_recombinations(self, test_results, recomb_id=None):
@@ -418,7 +420,7 @@ class Project(object):
                 logsummary.info("Recombination %s Approved" % recomb_id)
             else:
                 recomb.reject()
-                logsummary.info("Recombination %s Rejected" % recomb_id)
+                logsummary.info("Recombination %s Rejected: %s" % (recomb_id, test_analysis))
 
     def delete_service_branches(self):
         # cleanup github repos from recomb branches WIP
