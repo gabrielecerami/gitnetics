@@ -107,6 +107,8 @@ class LocalRepo(Git):
     def add_gerrit_remote(self, name, location, project_name, fetch=True):
         self.remotes[name] = Gerrit(name, location, project_name)
         self.addremote(name, self.remotes[name].url, fetch=fetch)
+        if name == 'original':
+            fetch=False
         if fetch:
             shell('git fetch %s +refs/changes/*:refs/remotes/%s/changes/*' % (name, name))
         try:
@@ -119,18 +121,22 @@ class LocalRepo(Git):
         self.addremote(name, self.remotes[name].url, fetch=fetch)
 
     def list_branches(self, remote_name, pattern=''):
+        os.chdir(self.directory)
         cmd = shell('git for-each-ref --format="%%(refname)" refs/remotes/%s/%s | sed -e "s/refs\/remotes\/%s\///"' % (remote_name, pattern, remote_name))
         return cmd.output
 
     def track_branch(self, branch, remote_branch):
+        os.chdir(self.directory)
         shell('git checkout parking')
         shell('git branch --track %s %s' % (branch, remote_branch))
 
     def delete_branch(self, branch):
+        os.chdir(self.directory)
         shell('git checkout parking')
         shell('git branch -D %s' % branch)
 
     def delete_remote_branches(self, remote_name, branches):
+        os.chdir(self.directory)
         for branch in branches:
             shell('git push %s :%s' % (remote_name,branch))
 

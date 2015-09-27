@@ -432,17 +432,17 @@ class Project(object):
 
     def delete_stale_branches(self):
         recomb_active_branches = list()
+        target_stale_branches = list()
         recomb_all_branches = self.underlayer.list_branches('replica', pattern='recomb*')
-        target_all_branches = self.underlayer.list_branches('replica', pattern='target-*')
-        # TODO
-        # recomb_all_branches = recomb_all_branches + target_all_branches
         infos = self.replica_remote.query_changes_json('"status:open AND project:%s"' % self.replica_project['name'])
         for info in infos:
             recomb_active_branches.append(info['branch'])
-            # TODO
-            #recomb_active_branches.append(info.target_replacement_branch)
 
         log.debugvar('recomb_active_branches')
         recomb_stale_branches = list(set(recomb_all_branches) - set(recomb_active_branches))
         log.debugvar('recomb_stale_branches')
         self.underlayer.delete_remote_branches('replica', recomb_stale_branches)
+        for recomb_branch in recomb_stale_branches:
+            target_stale_branches.append(re.sub('recomb-','target-',recomb_branch))
+        self.underlayer.delete_remote_branches('replica', target_stale_branches)
+
