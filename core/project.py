@@ -94,6 +94,10 @@ class Project(object):
             self.patches_branches['replica:' + replica_branch] = patches_branch
             self.patches_branches['target:' + target_branch] = patches_branch
 
+            self.orig_branches['patches:' + patches_branch] = original_branch
+            self.orig_branches['replica:' + replica_branch] = original_branch
+            self.orig_branches['target:' + target_branch] = original_branch
+
             self.recombinations[replica_branch] = None
             self.commits[replica_branch] = {}
 
@@ -358,7 +362,7 @@ class Project(object):
             if recomb.recomb_type == 'replica-mutation':
                 self.merge_replica_mutation_recombination(recomb)
             elif recomb.recomb_type == 'original-diversity':
-                return self.scan_original_distance(branch=recomb.original.branch)
+                return self.scan_original_distance(branch=recomb.recomb_data['sources']['main']['branch'])
         else:
             for branch in self.original_branches:
                 self.scan_patches_branch(branch)
