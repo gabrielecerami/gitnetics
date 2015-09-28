@@ -358,7 +358,7 @@ class Project(object):
             if recomb.recomb_type == 'replica-mutation':
                 self.merge_replica_mutation_recombination(recomb)
             elif recomb.recomb_type == 'original-diversity':
-                return self.scan_original_distance(branch=recomb.recomb_data['sources']['main']['branch'])
+                return self.scan_original_distance(recomb.recomb_data['sources']['main']['branch'])
         else:
             for branch in self.original_branches:
                 self.scan_patches_branch(branch)
