@@ -354,7 +354,7 @@ class Project(object):
     def check_approved_recombinations(self, recomb_id=None):
         if recomb_id:
             infos = self.recomb_remote.get_changes_info([recomb_id], key_field='number')[recomb_id]
-            recomb = Recombination(self.underlayer, infos=infos)
+            recomb = Recombination(self.underlayer, infos=infos, original_remote=self.original_remote, remote=self.recomb_remote, replica_remote=self.replica_remote, patches_remote=self.patches_remote)
             if recomb.recomb_type == 'replica-mutation':
                 self.merge_replica_mutation_recombination(recomb)
             elif recomb.recomb_type == 'original-diversity':
