@@ -141,6 +141,18 @@ class Gerrit(object):
 
         return changes
 
+    def get_recombinations_by_id(self, search_values, search_field='change', key_field='id', branch=None):
+        recombinations = dict()
+        query_string = self.get_query_string(search_field, search_values, branch=branch)
+        recombinations_infos = self.query_changes_json(query_string)
+
+        for gerrit_infos in recombinationss_infos:
+            infos = self.normalize_infos(gerrit_infos)
+            recomb = Recombination(infos=infos, remote=self)
+            recombinations[infos[key_field]] = recomb
+
+        return changes
+
     def get_original_ids(self, commits):
         ids = OrderedDict()
         for commit in commits:
