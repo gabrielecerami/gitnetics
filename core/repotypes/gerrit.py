@@ -89,7 +89,7 @@ class Gerrit(object):
                     verified = max(verified, int(patchset_approval['value']))
         log.debug("change %s max approvals: CR: %d, V: %d" % (infos['id'], code_review, verified))
         if code_review >= 2 and verified >= 1:
-           log.debug("change %s approved for submission if all precedent are approved too")
+           log.debug("change %s approved for submission if all precedent are approved too" % (infos['id']))
            return True
         return False
 
@@ -151,7 +151,7 @@ class Gerrit(object):
             recomb = Recombination(infos=infos, remote=self)
             recombinations[infos[key_field]] = recomb
 
-        return changes
+        return recombinations
 
     def get_original_ids(self, commits):
         ids = OrderedDict()
