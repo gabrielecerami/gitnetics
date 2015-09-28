@@ -117,7 +117,7 @@ if __name__=="__main__":
         gitnetic.poll_replica(patches_change_id=args.change_id)
 
     elif args.command == 'merge-recombinations':
-        gitnetic.check_approved_recombinations(recomb_id=args.recomb_id)
+        gitnetic.check_approved_recombinations(projects=args.projects, recomb_id=args.recomb_id)
 
     elif args.command == 'poll-original':
         gitnetic.poll_original()

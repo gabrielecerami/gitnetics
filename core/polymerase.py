@@ -116,9 +116,12 @@ class Polymerase(object):
                 else:
                     project.vote_recombinations(project_test_results)
 
-    def check_approved_recombinations(self, project_name=None, recomb_id=None):
+    def check_approved_recombinations(self, projects=None, recomb_id=None):
         success = True
         if recomb_id:
+            # TODO: raise error if more that one project specified
+            # TODO: try to guess project from change if not specified
+            project_name = projects.split(",")[0]
             project = self.projects[project_name]
             recombination = project.get_recombination(recomb_id)
             project.check_approved_recombinations(recombination=recombination)
