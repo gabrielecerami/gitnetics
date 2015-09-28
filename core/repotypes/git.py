@@ -320,7 +320,7 @@ class LocalRepo(Git):
 
     def update_target_branch(self, target_replacement_branch, target_branch):
         shell('git fetch replica')
-        shell('git branch remotes/replica/%s' % (target_replacement_branch))
+        shell('git checkout remotes/replica/%s' % (target_replacement_branch))
         shell('git push -f replica HEAD:%s' % (target_branch))
         shell('git checkout parking')
         shell('git push replica :%s ' % target_replacement_branch)
