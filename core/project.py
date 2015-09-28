@@ -257,12 +257,12 @@ class Project(object):
             for recomb_id in ids:
                 if recomb_id in recomb_infos:
                     # relative recombination exists, load informations
-                    recombinations[recomb_id] = Recombination(self.underlayer, 'original-diversity', remote=self.recomb_remote, infos=recomb_infos[recomb_id], original_remote=self.original_remote)
+                    recombinations[recomb_id] = Recombination(self.underlayer, recomb_type='original-diversity', remote=self.recomb_remote, infos=recomb_infos[recomb_id], original_remote=self.original_remote)
                 else:
                     # relative recombination missing, creating empty one
                     # Set real commit as revision
                     original_changes[recomb_id].revision = ids[recomb_id]
-                    recombinations[recomb_id] = Recombination(self.underlayer, 'original-diversity', remote=self.recomb_remote)
+                    recombinations[recomb_id] = Recombination(self.underlayer, recomb_type='original-diversity', remote=self.recomb_remote)
                     recombinations[recomb_id].status = "MISSING"
                     recombinations[recomb_id].branch = "recomb-original-%s-%s" % (original_branch, original_changes[recomb_id].revision)
                     recombinations[recomb_id].target_replacement_branch = "target-original-%s-%s" % (original_branch, original_changes[recomb_id].revision)
@@ -282,9 +282,9 @@ class Project(object):
     def get_recombination_by_patch_change(self, patches_change_id):
         infos = self.patches_remote.get_changes_info([patches_change_id], search_field='topic', key_field='topic')
         if patches_change_id in infos:
-            recombination = Recombination(self.underlayer, 'replica-mutation', remote=self.recomb_remote, patches_remote=self.patches_remote, infos=infos[patches_change_id])
+            recombination = Recombination(self.underlayer, recomb_type='replica-mutation', remote=self.recomb_remote, patches_remote=self.patches_remote, infos=infos[patches_change_id])
         else:
-            recombination = Recombination(self.underlayer, 'replica-mutation', remote=self.recomb_remote)
+            recombination = Recombination(self.underlayer, recomb_type='replica-mutation', remote=self.recomb_remote)
             mutation_change = self.patches_remote.get_changes_by_id([patches_change_id])[patches_change_id]
             patches_branch = mutation_change.branch
 
@@ -329,7 +329,7 @@ class Project(object):
         branch_patches = 'recomb-patches-%s.*' % replica_branch
         infos = self.replica_remote.get_approved_change_infos(branch_patches)
         for change_number in infos:
-            recombination = Recombination(self.underlayer, 'replica-mutation', remote=self.recomb_remote, patches_remote=self.patches_remote, infos=infos[change_number])
+            recombination = Recombination(self.underlayer, recomb_type='replica-mutation', remote=self.recomb_remote, patches_remote=self.patches_remote, infos=infos[change_number])
             self.merge_replica_mutation_recombination(recombination, replica_branch)
 
     def merge_replica_mutation_recombination(self, recombination, replica_branch):

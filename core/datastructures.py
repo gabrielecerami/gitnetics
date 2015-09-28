@@ -76,7 +76,7 @@ class Change(object):
 
 class Recombination(Change):
 
-    def __init__(self, underlayer, recomb_type, remote=None, replica_remote=None, original_remote=None, patches_remote=None, infos=None):
+    def __init__(self, underlayer, recomb_type=None, remote=None, replica_remote=None, original_remote=None, patches_remote=None, infos=None):
         self.underlayer = underlayer
         self.removed_commits = None
         if original_remote:
@@ -90,23 +90,24 @@ class Recombination(Change):
             self.decode_subject(original_remote=original_remote, replica_remote=replica_remote, patches_remote=patches_remote)
         else:
             super(Recombination, self).__init__(remote=remote)
-            self.recomb_type = recomb_type
             self.subject = None
             self.patches_queue = None
             self.own_merge_commit = None
             self.replica_revision = None
-            if self.recomb_type == 'replica-mutation':
-                try:
-                    self.replica_change = Change(remote=replica_remote)
-                    self.mutation_change = Change(remote=patches_remote)
-                except NameError:
-                    raise MissingInfoError
-            elif self.recomb_type == 'original-diversity':
-                try:
-                    self.original_change = Change(remote=original_remote)
-                    self.diversity_change = Change(remote=patches_remote)
-                except NameError:
-                    raise MissingInfoError
+            if recomb_type is not None:
+                self.recomb_type = recomb_type
+                if self.recomb_type == 'replica-mutation':
+                    try:
+                        self.replica_change = Change(remote=replica_remote)
+                        self.mutation_change = Change(remote=patches_remote)
+                    except NameError:
+                        raise MissingInfoError
+                elif self.recomb_type == 'original-diversity':
+                    try:
+                        self.original_change = Change(remote=original_remote)
+                        self.diversity_change = Change(remote=patches_remote)
+                    except NameError:
+                        raise MissingInfoError
 
 
     def decode_subject(self, original_remote=None, replica_remote=None, patches_remote=None):
