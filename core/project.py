@@ -351,12 +351,13 @@ class Project(object):
         #    local_repo.merge_fortests(change['upstream_revision'], patches_revision)
         #    upload new patchset with updated master-patches and updated message on midstream changes with old master_patches
 
-    def check_approved_recombinations(self, recombination=None):
-        if recombination:
-            if recombination.recomb_type == 'replica-mutation':
-                self.merge_replica_mutation_recombination(recombination)
-            elif recombination.recomb_type == 'original-diversity':
-                return self.scan_original_distance(branch=recombination.original.branch)
+    def check_approved_recombinations(self, recomb_id=None):
+        if recomb_id:
+            recomb = self.recomb_remote.get_changes_by_id([recomb_id], key_field='number')[recomb_id]
+            if recomb.recomb_type == 'replica-mutation':
+                self.merge_replica_mutation_recombination(recomb)
+            elif recomb.recomb_type == 'original-diversity':
+                return self.scan_original_distance(branch=recomb.original.branch)
         else:
             for branch in self.original_branches:
                 self.scan_patches_branch(branch)

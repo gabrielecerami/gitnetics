@@ -123,8 +123,7 @@ class Polymerase(object):
             # TODO: try to guess project from change if not specified
             project_name = projects.split(",")[0]
             project = self.projects[project_name]
-            recombination = project.get_recombination(recomb_id)
-            project.check_approved_recombinations(recombination=recombination)
+            project.check_approved_recombinations(recomb_id=recomb_id)
         else:
             for project_name in self.projects:
                 log.info("Checking project '%s'" % project_name)
