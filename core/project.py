@@ -94,10 +94,6 @@ class Project(object):
             self.patches_branches['replica:' + replica_branch] = patches_branch
             self.patches_branches['target:' + target_branch] = patches_branch
 
-            self.orig_branches['patches:' + patches_branch] = original_branch
-            self.orig_branches['replica:' + replica_branch] = original_branch
-            self.orig_branches['target:' + target_branch] = original_branch
-
             self.recombinations[replica_branch] = None
             self.commits[replica_branch] = {}
 
