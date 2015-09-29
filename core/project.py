@@ -314,6 +314,8 @@ class Project(object):
         for original_branch in self.original_branches:
             patches_branch = self.patches_branches['original:' + original_branch]
             patches_changes = self.patches_remote.get_open_patches(patches_branch)
+            if not patches_changes:
+                logsummary.info("Project %s no new patches in patches branch %s" % (self.project_name, patches_branch))
             for patches_change_id in patches_changes:
                 recombination = self.get_recombination_by_patch_change(patches_change_id)
                 if recombination.status == "MISSING":
