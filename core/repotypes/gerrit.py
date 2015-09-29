@@ -169,6 +169,18 @@ class Gerrit(object):
         log.debugvar('untested_recombs')
         return untested_recombs
 
+    def get_open_patches(self, branch):
+        changes = dict()
+        query_string = "'owner:self AND project:%s AND branch:%s AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND status:open)'"  % (self.project_name, branch)
+        changes_infos = self.query_changes_json(query_string)
+
+        for gerrit_infos in changes_infos:
+            infos = self.normalize_infos(gerrit_infos)
+            change = Change(infos=infos, remote=self)
+            changes[infos['number']] = change
+
+        return changes
+
     def get_approved_change_infos(self, branch):
         infos = dict()
         query_string = "'owner:self AND project:%s AND branch:^%s AND label:Code-Review+2 AND label:Verified+1 AND status:open'" % (self.project_name, branch)
