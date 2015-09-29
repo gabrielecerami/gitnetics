@@ -37,7 +37,9 @@ class Project(object):
         self.rev_deps = None
         if 'rev-deps' in project_info:
             self.rev_deps = project_info['rev-deps']
-        self.test_types = project_info["replica"]["tests"]
+        self.test_types = []
+        if "tests" in project_info['replica'] and project_info["replica"]["tests"] is not None:
+            self.test_types = project_info["replica"]["tests"]
         self.test_minimum_score = 0
 
         if 'revision_lock' in self.replica_project:
