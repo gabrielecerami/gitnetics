@@ -37,9 +37,11 @@ class Project(object):
         self.rev_deps = None
         if 'rev-deps' in project_info:
             self.rev_deps = project_info['rev-deps']
+
         self.test_types = []
         if "tests" in project_info['replica'] and project_info["replica"]["tests"] is not None:
             self.test_types = project_info["replica"]["tests"]
+
         self.test_minimum_score = 0
 
         if 'revision_lock' in self.replica_project:
@@ -377,12 +379,15 @@ class Project(object):
 
     def fetch_untested_recombinations(self, test_basedir, recomb_id=None):
         changes_infos = dict()
+        dirlist = dict()
         untested_recombs = self.recomb_remote.get_untested_recombs_infos(recomb_id=recomb_id)
-        if not untested_recombs:
-            dirlist =dict()
+        if not self.test_types:
+            logsummary.indo("Project '%s': no tests specified" % self.project_namme)
+        elif not untested_recombs:
             logsummary.info("Project '%s': no untested recombinations" % self.project_name)
         else:
             dirlist = self.underlayer.fetch_recomb(test_basedir, untested_recombs, self.recomb_remote.name)
+
         for change_number in dirlist:
             tests = dict()
             projects = self.get_reverse_dependencies(tags=['included','contained','required','classes', 'functions'])
