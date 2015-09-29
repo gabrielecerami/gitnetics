@@ -382,7 +382,7 @@ class Project(object):
         dirlist = dict()
         untested_recombs = self.recomb_remote.get_untested_recombs_infos(recomb_id=recomb_id)
         if not self.test_types:
-            logsummary.info("Project '%s': no tests specified" % self.project_namme)
+            logsummary.info("Project '%s': no tests specified" % self.project_name)
         elif not untested_recombs:
             logsummary.info("Project '%s': no untested recombinations" % self.project_name)
         else:
