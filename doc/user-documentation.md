@@ -62,11 +62,11 @@ types
 
 Only two types of recombinations are allowed
 - original-diversity
-        created when a change is coming from our original repo (upstream in this case)
-        produces  merge to commit into master-tag branch, and a new updated master branch in the replica
+    created when a change is coming from original repo
+    produces  merge to commit into branch-tag branch, and a new updated branch in the replica
 - replica-mutation
-        created when we have a mutation, for example a new patch for the master-patches branch
-        produces an updated master-patches and again a merge to commit to master-tag branch
+    created when we have a mutation, for example a new review for the branch-patches branch
+    produces an updated branch-patches and again a merge to commit to branch-tag branch
 
 
 Recombination in practice
@@ -74,15 +74,54 @@ Recombination in practice
 
 the merge attemmt process
 -------------------------
-        temporary branches
-            recomb branch (squashed) imagining a master-patches with multiple commits to merge, gerrit requires you to squash those commits before uploading for review
-            target branch (not squashed)
-    the real merge process
+When attempting the merge of a new change from original repo with local modifications in branch-patches (original-diversity recombination)
+two temporary branches for each original commit are used to store temporary snapshots in replica repository
+- recomb-<original_branch_name>-<original_commit_id>
+- target-<original_branch_name>-<original_commit_id>
+
+These two branches are created with their HEAD set to the first parent of the original commit, and pushed to replica.
+A squashed merge is then attempted on the top of recomb-branch using original commit and branch-patches HEAD as commit ids for the merge.
+If the merge is successful, the result of this attempt is uploaded as review to replica on the recomb-branch.
+A second non squashed merge is then performed on top of target-branch, and force pushed directly to replica/target-branch without a review.
+Those two branches represents respectively the recombination, and the future branch-tag.
+The merge on recomb-branch must be squashed because original commit could be a merge commit and gerrit will not accept multiple commits as a review, and that's why a second
+branch with non squashed commits is needed.
+
+When attempting the merge of a new change in branch-patches with replica repo (replica-mutation recombination) the process is the same, but with the only difference that replica HEAD and branch-patches commit are used in the merge steps
 
 recombination review structure
 ------------------------------
-            commit message
-            topic
+Each review is created on replica gerrit follow this scheme:
+
+- branch: temporary recomb-branch
+- topic: original commit Change-Id (for gerrit originals) or commit-id (for git-only originals)
+- commit message: as commit message a valid yaml document is uploaded. This is an example commit message:
+
+    Recombination: original:72998e-diversity:6a9f94/master
+
+    sources:
+        main:
+             branch: master
+             id: 72998ebbfd22e5cafc350527be1deab1c6fb90ac
+             name: original
+             revision: 72998ebbfd22e5cafc350527be1deab1c6fb90ac
+        patches:
+             branch: master-patches
+             id: 6a9f9492af6a3a59b74f043ce6bb8227909224b2
+             name: diversity
+             revision: 6a9f9492af6a3a59b74f043ce6bb8227909224b2
+    target-replacement-branch: target-original-master-72998ebbfd22e5cafc350527be1deab1c6fb90ac
+
+The first line serves as subject and contains a summary of the recombination. From this first line we can detect the recombination type, the commits merged and the original branch
+The rest of the commit message contains detailed an complete informations on the components that form the recombination.
+The last line contains the name of the target-branch that will be force pushed to branch-tag (master-tag in this case) when the recombination will be approved and merged.
+
+Automatic conflict resolution
+-----------------------------
+If a merge attempt fails, gitnetics will attempt to remove commits from branch-patches one by one, until the merge succeed. It will then
+add to the commit message a removed-patches-commits variable with a list of removed commits and force push the resulting branch to branch-patches.
+Force pushing new branch-patches could seem a little drastic, but dld recombinations will not need the old branch-patches because the merge is already stored in target-branch,
+and advancement for replica cannot continue if that particular commit cannot pass a merge test.
 
 replica update process
 ----------------------
@@ -115,9 +154,10 @@ Taking as an example these list of commits in replica -> original interval
 Projects configuration
 ======================
 
-gitnetics uses a configuration file in yaml passed as a mandatory argument to the command line
-that contains all the informations need to maintain the replication process
-It contains this variables:
+Gitnetics is able to maintain multiple project and multiple branches. The details of these projects
+must be place into a yaml file, and passed to gitnetics as a mandatory argument to the command line
+
+Here's an example of a project configuration:
 
     puppetlabs-xinetd:
         deploy-name: xinetd
@@ -131,34 +171,98 @@ It contains this variables:
         replica:
             location: gerrithub-rdoci
             name: rdo-puppet-modules/puppetlabs-xinetd
-            tests: null
+            tests:
+                - stability
+                - upstream
         test-deps:
             puppetlabs-concat: classes
             puppetlabs-stdlib: functions
 
-basic informations
-------------------
+Basic configuration
+-------------------
 
-features
---------
-        branch selection
-        branch mapping
-        tests selection
-        revision lock
-        dependency handling
-        conflict resolution
+- the key of the variable dict is the name of the project
+- deploy-name is the name of the project during deployment (e.g. name of the directory that contains the project after installation)
+- original: contains the informations on the original repo such as:
+    * location: is the name of the original repo as defined in ssh config.gitnetics only support ssh access to git repositories. it is required for each location mentioned to have a definition in ssh config file
+    * name: name of the project in git location
+    * type: either git or gerrit are supported for the original repos
+- replica:
+    * location: name of the replica repo
+    * name: name of project in git location
+    * type cannot be selected, replica repository must_ be a gerrit instance
+    * tests: is a list of test name that should be run on each recombination. The list will be passed to the test suite
+
+Advanced features
+-----------------
+- original/watched-branches: is a list of branch from original repo we want to follow. if not specified, all original branches will be examined
+    * watches-branches may contain a map of branches we want to follow, with a translation in another branch name. (e.g. master from original will be replicated to stable in replica)
+- replica/revision_lock: is a map that specify that for a certain branch we don't want to advance replica behind a certain commit id
+- test-deps: a list of other projects names on which this project depends. A list of comma separated tags may be specified to mark the type of dependency.
+  test-deps will be used during testing phase to extract reverse dependencies information on each running test.
 
 
 command line
-------------
-subcommands
 ===========
-        poll-original
-            for each commit that is upstream but not midstream, attempt the merge and upload the result as a review
+
+gitnetics can be run with
+
+    python gitnetics.py
+
+common arguments for all subcommands
+----------------
+
+- Mandatory
+    * --projects-conf: to specify the path of projects.yaml file
+    * --base-dir: base dir of operations, where local copies of projects will be created
+
+- Optional:
+    * --projects: a comma separated list of projects name to filter on what projects run the subcommand, based on project name
+    * --watch-methods: a comma separated list of watch methods to filter on what project run the subcommand, based on watch-method
+    * --watch-branches: a comma separated list of branches to filter on what branch on the filtered list of project run the subcommand.
+    * --no-fetch: do not fetch updates in local git repositories, speeding up the commands (useful mainly for re-runs)
+
+All paths must be absolute.
+
+subcommands
+-----------
+
+- poll-original
+  no arguments needed
+  for each branch on each project, examine the commit in the interval replica HEAD -> original HEAD, and handle the original-diversity recombinations as their status require
+
+- poll-replica
+  if called without other arguments: for each branch-patches on each project, check for new changes in branch-patches, and create replica-mutation recombinations
+  * --change-id: specify a change to check
+
+- prepare-tests
+  mandatory arguments:
+    * tests_basedir: base dir of the tests directory structure
+  if called without other arguments: for each untested recombination on each project, download recombination code and prepare a directory structure containing the information
+  needed by the test suite to test the recombination
+  * --recombination-id: prepare tests only for the specified recombination
+
+- vote-recombinations:
+  mandatory arguments:
+    * tests_basedir: base dir of the tests directory structure
+  it will scan the directory structure and vote on recombination that passed the tests
+  * --recombination-id: scan tests only for the specified recombination
+
+- merge-recombinations
+  if called without other arguments: for each branch on each project, will check approved recombinations
+    * on original-diversity recombinations, the command will call the same scan function as poll-original to handle recombination list, so this command may actually create some missing review too.
+    * on replica-mutation recombinations, it will merge the recombination, force push target-branch to branch-tag and approve and submit the mutation on branch-patches too
+  * --recombination-id: specify a recombination to check
+
+- cleanup
+  no arguments needed
+  it will perform maintenance tasks on replica and any mirror of replica repositories
+  * stale branches deletion: will detect and delete temporary target- and recomb- branches that are not referred by any recombination
+  * delete mirror branches: gerrit repositories tend to replicate everything and delete nothing from their git mirrors counterparts. this task will delete any targget- and recomb- branches from mirror repositories. They are only needed by replica base repositories
 
 
 Tests
------
+=====
 
 the subcommand *prepare_tests* called for a project (target_project) will:
 
@@ -200,21 +304,53 @@ for example
     tests_base/<project_name>/<recomb_id>/results/<test_type>/<project_dependency2_name>.xml
 
 
-the subcommand *vote_recombination* will then look at test results inside this updated directory structure, and following vote criteria, it will approve (Code-Review +2 , Verified +1) the correspoding recombinations
+the subcommand *vote-recombinations* will then look at test results inside this updated directory structure, and following vote criteria, it will approve (Code-Review +2 , Verified +1) the correspoding recombinations
+
+workflow
+========
+
+The gitnetics workflow is formed by two groups of 3 steps each
+
+1. original to replica workflow
+    1. original commits handling (performed by poll-original subcommand)
+    2. recombinations test (perfomed by prepare-test subcommand, an arbitrary test suite run, and a vote-recombinations subcommmand)
+    3. replica advancement (performed by merge-recombinations subcommand)
+2. patches to replica workflow
+    1. patches commits handling (performed by poll-replica subcommand)
+    2. recombinations tests (perfomed by prepare-test subcommand, an arbitrary test suite run, and a vote-recombinations subcommmand)
+    3. patches update (performed by merge-recombinations subcommand)
+
 
 workflow jobs
 -------------
-    general considerations 
-        (event triggers, time triggers)
-        gerrit event trigger a scan on the project
-        batch operations
-    example
 
-typical workflow
-================
+To make gitnetics effective in CI frameworks like jenkins, a minimum of 4 jobs must be created.
+(see a sample jenkins-jobs-builder configuration in examples/ directory of this documentation as a reference.)
+
+- a job that launches poll-original subcommand
+  it should be triggered by a timer, without arguments, to check on all projects, or with --watch-methods poll to check only git-based original repositories
+  the job may be triggered by a gerrit event too, but in this case --projects should be specified with the proper project name
+
+- a job that prepare tests, launches tests suite, collect results and vote on recombinations
+  this job should be triggered by patcheset create event for recomb-* branches in replica gerrit
+
+- a job that launches  merge-recombinations subcommand
+  it should be triggered by comment event on any recomb-* branches in replica gerrit
+
+- a job that launches poll-replica subcommand
+  it should be triggered by patchset create event for *-patches branch in replica gerrit
+
+Creating a job that launches the cleanup subcommand triggered by timee is strongly recommended.
+
+As a final note, a consideration for gerrit events may be in order. They are a nice way to make steps in the workflow synchronous with what's happening
+in the original or replica repositories, but they are not a reliable message passing method. They can be lost very easily
+for a large number of reasons, and cannot be replayed in any way.
+I strongly suggest to add timed triggers to all the jobs, to check all the projects and all the branches for something that the we have missed from the gerrit repositories.
+Every subcommand has the ability to perform batch operations on all the projects specified in projects files, and replica update process is studied to not rely much on
+such events, to always detects and recover what's missing from the interval tht needs to be examined.
 
 
-OMGS:
+TODS:
     get score criteria (we probably want to just know if the test was run or not)
     recombination tets distribution (1 job per test)
 
