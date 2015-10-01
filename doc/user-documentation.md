@@ -125,7 +125,7 @@ Each review created on replica gerrit follows this scheme:
   is an example commit message
 
 
-
+```yaml
     Recombination: original:72998e-diversity:6a9f94/master
     sources:
         main:
@@ -139,6 +139,7 @@ Each review created on replica gerrit follows this scheme:
              name: diversity
              revision: 6a9f9492af6a3a59b74f043ce6bb8227909224b2
     target-replacement-branch: target-original-master-72998ebbfd22e5cafc350527be1deab1c6fb90ac
+```
 
 The first line serves as subject and contains a summary of the recombination.
 From this first line we can detect the recombination type, the commits merged
@@ -223,6 +224,7 @@ gitnetics as a mandatory argument to the command line
 
 Here's an example of a project configuration:
 
+```yaml
     puppetlabs-xinetd:
         deploy-name: xinetd
         original:
@@ -241,6 +243,7 @@ Here's an example of a project configuration:
         test-deps:
             puppetlabs-concat: classes
             puppetlabs-stdlib: functions
+```
 
 Basic configuration
 -------------------
@@ -373,7 +376,7 @@ the subcommand **prepare_tests** called for a project (target_project) will:
       variables pertaining a certain recombination to test in this form
 
 
-
+```yaml
     recombination_dir: puppet-keystone/245318/code
     recombination_id: '245318'
     target-project: puppet-keystone
@@ -386,7 +389,7 @@ the subcommand **prepare_tests** called for a project (target_project) will:
             types:
                 stability: puppet-keystone/245318/results/stability/puppet-glance_results.xml
                 upstream: puppet-keystone/245318/results/upstream/puppet-glance_results.xml
-
+```
 
 path variables contain relative paths for the directory structure itself.
 types.type will hint where to put the results of that type of test for a certain
