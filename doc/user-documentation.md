@@ -10,9 +10,9 @@ tested result to the local copy
 Contents
 -------
 
-[Intro](intro.md)
-[Recombination](recombinations.md)
-[Project Configuration](configurations.md)
-[Command line](commandline.md)
-[Tests](tests.md)
-[Workflow](workflow.md)
+* [Intro](intro.md)
+* [Recombination](recombinations.md)
+* [Project Configuration](configurations.md)
+* [Command line](commandline.md)
+* [Tests](tests.md)
+* [Workflow](workflow.md)
