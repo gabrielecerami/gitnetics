@@ -126,7 +126,6 @@ Each review created on replica gerrit follows this scheme:
 
 
     Recombination: original:72998e-diversity:6a9f94/master
-
     sources:
         main:
              branch: master
@@ -365,16 +364,14 @@ the subcommand **prepare_tests** called for a project (target_project) will:
 - finally, assemble all the informations above and create the directory
   structure shown below
 
+    * **tests-base/project-var.yml**: contains the projects.yaml information under
+      the 'project' superdict
+    * **tests_base/\<target_project_name\>/\<recomb_id\>/code**: contains the
+      recombination code to use in the tests.
+    * **tests_base/\<target_project_name\>/\<recomb_id\>/vars.yaml**: contains
+      variables pertaining a certain recombination to test in this form:
 
-* **tests-base/project-var.yml**: contains the projects.yaml information under
-  the 'project' superdict
-* **tests_base/\<target_project_name\>/\<recomb_id\>/code**: contains the
-  recombination code to use in the tests.
-* **tests_base/\<target_project_name\>/\<recomb_id\>/vars.yaml**: contains
-  variables pertaining a certain recombination to test in this form:
 
-
-    ---
     recombination_dir: puppet-keystone/245318/code
     recombination_id: '245318'
     target-project: puppet-keystone
@@ -393,15 +390,14 @@ path variables contain relative paths for the directory structure itself.
 types.type will hint where to put the results of that type of test for a certain
 project
 
-* tests_base/\<target_project_name\>/\<recomb_id\>/results/\<test_type\>/ should
-  contain result files for every project (target and dependencies) tested in the
-  recombination
+* **tests_base/\<target_project_name\>/\<recomb_id\>/results/\<test_type\>/**
+  should contain result files for every project (target and dependencies) tested
+  in the recombination
 
 Test suite is expected to fill this directory with the test result of each
 single component, as shown in vars.yaml file.
 
 for example
-
 
     tests_base/<project_name>/<recomb_id>/results/<test_type>/<target_project_name>.xml
     tests_base/<project_name>/<recomb_id>/results/<test_type>/<project_dependency1_name>.xml
