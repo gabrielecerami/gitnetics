@@ -122,7 +122,8 @@ Each review created on replica gerrit follows this scheme:
 - **topic**: original commit Change-Id (for gerrit originals) or commit-id (for
   git-only originals)
 - **commit message**: as commit message a valid yaml document is uploaded. This
-  is an example commit message:
+  is an example commit message
+
 
 
     Recombination: original:72998e-diversity:6a9f94/master
@@ -369,7 +370,8 @@ the subcommand **prepare_tests** called for a project (target_project) will:
     * **tests_base/\<target_project_name\>/\<recomb_id\>/code**: contains the
       recombination code to use in the tests.
     * **tests_base/\<target_project_name\>/\<recomb_id\>/vars.yaml**: contains
-      variables pertaining a certain recombination to test in this form:
+      variables pertaining a certain recombination to test in this form
+
 
 
     recombination_dir: puppet-keystone/245318/code
