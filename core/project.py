@@ -312,6 +312,7 @@ class Project(object):
             patches_changes = self.patches_remote.get_changes_by_id([patches_branch], search_field='branch', branch=patches_branch )
             for patches_change_id in patches_changes:
                 recombination = self.get_recombination_by_patch_change(patches_change_id)
+                # TODO: handle new patchset on same branch-patches review.
                 if recombination.status == "MISSING":
                     recombination.test()
                     # log.error("Recombination attempt unsuccessful")
