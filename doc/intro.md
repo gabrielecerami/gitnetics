@@ -32,6 +32,10 @@ From now on, we will use these two terms to identify the repositories.
 - **original**: the repo we are trying to replicate
 - **replica**: the repo to where we want to replicate the original
 
+You may want to consider these as "upstream" and "downstream" in you particular
+settings, but we found those generalized term less confusing in less ordinary
+setups.
+
 Every branch from original is handled in replica using three different branches
 - **replica/branch** is the exact clone of the original branch, updated
   gradually after verifications
