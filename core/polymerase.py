@@ -1,6 +1,8 @@
 import copy
+import traceback
 from colorlog import log, logsummary
 from project import Project
+import sys
 
 
 class Polymerase(object):
@@ -13,14 +15,15 @@ class Polymerase(object):
         for project in self.projects_conf:
             self.projects_conf[project]["rev-deps"] = {}
         for project in self.projects_conf:
-            for test_dep in self.projects_conf[project]["test-deps"]:
-                rev_dep = {
-                    project : {
-                    "tags" :self.projects_conf[project]["test-deps"][test_dep],
-                    "tests":self.projects_conf[project]["replica"]["tests"]
+            if "test-teps" in self.projects_conf[project]:
+                for test_dep in self.projects_conf[project]["test-deps"]:
+                    rev_dep = {
+                        project : {
+                        "tags" :self.projects_conf[project]["test-deps"][test_dep],
+                        "tests":self.projects_conf[project]["replica"]["tests"]
+                        }
                     }
-                }
-                self.projects_conf[test_dep]["rev-deps"].update(rev_dep)
+                    self.projects_conf[test_dep]["rev-deps"].update(rev_dep)
 
         # restrict project to operate on
         projects = copy.deepcopy(projects_conf)
@@ -62,6 +65,7 @@ class Polymerase(object):
                 self.projects[project_name] = Project(project_name, projects[project_name], self.base_dir + "/"+ project_name, fetch=fetch)
                 logsummary.info("Project: %s initialized" % project_name)
             except Exception, e:
+                traceback.print_exc(file=sys.stdout)
                 log.error(e)
                 logsummary.error("Project %s skipped, reason: %s" % (project_name, e))
 
@@ -71,22 +75,19 @@ class Polymerase(object):
         for project_name in self.projects:
             logsummary.info('Project: %s' % project_name)
             project = self.projects[project_name]
-            try:
-                project.poll_original_branches()
-            except Exception, e:
-               logsummary.info("Problem with project %s: %s. Skipping" % (project_name, e))
+            #try:
+            #    project.poll_original_branches()
+            project.poll_original_branches()
+            #except Exception, e:
+            #   logsummary.info("Problem with project %s: %s. Skipping" % (project_name, e))
         return success
 
-    def poll_replica(self, project_name=None, patches_change_id=None):
+    def poll_replica(self, patches_branch=None):
         success = True
         for project_name in self.projects:
             project=self.projects[project_name]
-            if patches_change_id:
-                if not project.new_replica_patch(patches_change_id):
-                    success = False
-            else:
-                if not project.scan_replica_patches():
-                    success = False
+            if not project.scan_replica_patches(patches_branch=patches_branch):
+                success = False
         return success
 
     def prepare_tests(self, tests_basedir, recomb_id=None):
@@ -116,23 +117,19 @@ class Polymerase(object):
                 else:
                     project.vote_recombinations(project_test_results)
 
-    def check_approved_recombinations(self, project_name=None, recomb_id=None):
-        success = True
-        if recomb_id:
+    def check_approved_recombinations(self, recomb_id=None):
+        for project_name in self.projects:
+            log.info("Checking project '%s'" % project_name)
             project = self.projects[project_name]
-            recombination = project.get_recombination(recomb_id)
-            project.check_approved_recombinations(recombination=recombination)
-        else:
-            for project_name in self.projects:
-                log.info("Checking project '%s'" % project_name)
-                project = self.projects[project_name]
-                project.check_approved_recombinations()
+            project.check_approved_recombinations(recomb_id=recomb_id)
 
     def janitor(self):
         for project_name in self.projects:
             project = self.projects[project_name]
+            log.info("Cleaning up %s replica repositories" % project_name)
+            log.info("Deleting service branches from mirror")
             project.delete_service_branches()
-            log.info("delete stale branches")
+            log.info("delete stale branches from replica")
             project.delete_stale_branches()
             # non-existing:
             # for branch in watched branches

@@ -28,7 +28,7 @@ def parse_args(parser):
     subparsers = parser.add_subparsers(dest='command')
 
     parser_new_replica_patch = subparsers.add_parser('poll-replica', help='poll replica', description='poll replica')
-    parser_new_replica_patch.add_argument('-c','--change-id', dest='change_id', action='store', help='change id to handle')
+    parser_new_replica_patch.add_argument('-b','--branch', dest='branch', action='store', help='branch to handle')
 
     parser_merge_recombination = subparsers.add_parser('merge-recombinations')
     parser_merge_recombination.add_argument('-r','--recombination-id', dest='recomb_id', action='store', help='change id to handle')
@@ -89,6 +89,7 @@ if __name__=="__main__":
             if 'vars.yaml' in files:
                 with open(os.path.join(root, "vars.yaml")) as var_file:
                     test_vars = yaml.load(var_file)
+                log.debugvar('test_vars')
                 target_project = test_vars['target_project']
                 try:
                     exists = test_results[target_project]
@@ -114,7 +115,7 @@ if __name__=="__main__":
             logsummary.info("No test results to vote")
 
     elif args.command == 'poll-replica':
-        gitnetic.poll_replica(patches_change_id=args.change_id)
+        gitnetic.poll_replica(patches_branch=args.branch)
 
     elif args.command == 'merge-recombinations':
         gitnetic.check_approved_recombinations(recomb_id=args.recomb_id)
