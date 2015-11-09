@@ -38,6 +38,7 @@ class Project(object):
         if 'rev-deps' in project_info:
             self.rev_deps = project_info['rev-deps']
         self.test_types = project_info["replica"]["tests"]
+        self.replication_strategy = project_info['replication-strategy']
         self.test_minimum_score = 0
 
         if 'revision_lock' in self.replica_project:
@@ -96,10 +97,6 @@ class Project(object):
 
             self.recombinations[replica_branch] = None
             self.commits[replica_branch] = {}
-
-    def update_target_branch(self, recombination, replica_branch):
-        target_branch = self.target_branches['replica:' + replica_branch]
-        self.underlayer.update_target_branch(recombination.target_replacement_branch, target_branch)
 
     def get_slices(self, recombinations):
         slices = {
@@ -171,12 +168,10 @@ class Project(object):
             # master is out of sync, changes need to be pushed
             # but check first if the change was changed with a merge commit
             # if yes, push THAT to master, if not, it's just a fast forward
-            log.warning("branch is out of sync with original")
             segment = slices['MERGED'][0]
             recomb_id = list(recombinations)[segment['end'] - 1]
             recombination = recombinations[recomb_id]
-            recombination.sync_replica(replica_branch)
-            self.update_target_branch(recombination, replica_branch)
+            recombination.handle_status()
 
         # Gerrit operations from approved changes
         # NOthing 'approved' can be merged if it has some "present" before in the history
@@ -195,15 +190,7 @@ class Project(object):
         for segment in slices['APPROVED']:
             for recomb_id in list(recombinations)[segment['start']:segment['end']]:
                 recombination = recombinations[recomb_id]
-                try:
-                    recombination.sync_replica(replica_branch)
-                except RecombinationSyncReplicaError:
-                    log.error("Replica could not be synced")
-                self.update_target_branch(recombination, replica_branch)
-                try:
-                    recombination.submit()
-                except RecombinationSubmitError:
-                    log.error("Recombination not submitted")
+                recombinaion.handle_status()
 
         # Notify of presence
         for segment in slices['PRESENT']:
@@ -216,16 +203,7 @@ class Project(object):
             for recomb_id in list(recombinations)[segment['start']:segment['end']]:
                 log.warning("Change %s is missing from midstream gerrit" % recomb_id)
                 recombination = recombinations[recomb_id]
-                try:
-                    recombination.test()
-                except TestError:
-                    log.error("Recombination attempt unsuccessful")
-                    raise UploadError
-                try:
-                    recombination.upload()
-                except UploadError:
-                    log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
-                    raise UploadError
+                recombination.handle_status()
 
         return True
 
@@ -257,20 +235,27 @@ class Project(object):
             for recomb_id in ids:
                 if recomb_id in recomb_infos:
                     # relative recombination exists, load informations
-                    recombinations[recomb_id] = Recombination(self.underlayer, 'original-diversity', remote=self.recomb_remote, infos=recomb_infos[recomb_id], original_remote=self.original_remote)
+                        recombinations[recomb_id] = Recombination(self.underlayer, remote=self.recomb_remote, infos=recomb_infos[recomb_id], original_remote=self.original_remote)
                 else:
                     # relative recombination missing, creating empty one
                     # Set real commit as revision
                     original_changes[recomb_id].revision = ids[recomb_id]
-                    recombinations[recomb_id] = Recombination(self.underlayer, 'original-diversity', remote=self.recomb_remote)
-                    recombinations[recomb_id].status = "MISSING"
-                    recombinations[recomb_id].branch = "recomb-original-%s-%s" % (original_branch, original_changes[recomb_id].revision)
-                    recombinations[recomb_id].target_replacement_branch = "target-original-%s-%s" % (original_branch, original_changes[recomb_id].revision)
-                    recombinations[recomb_id].topic = recomb_id
+
+                    if self.replication_type == "change-by-change":
+                        recombinations[recomb_id] = Recombination(self.underlayer, strategy="change-by-change", recomb_type='original-diversity', remote=self.recomb_remote)
+                        recombinations[recomb_id].target_replacement_branch = "target-original-%s-%s" % (original_branch, original_changes[recomb_id].revision)
+                        recombinations[recomb_id].target_branch = "%s" % (self.target_branches['original:' + original_branch])
+
+                    elif self.replication_type == "lock-and-backports":
+                        recombinations[recomb_id] = Recombination(self.underlayer, strategy="lock-and-backports", recomb_type='evolution-diversity', remote=self.recomb_remote)
+                        recombinations[recomb_id].target_gerrit_branch = patches_branches["original:" + original_branch]
 
                     recombinations[recomb_id].original_change = original_changes[recomb_id]
-
+                    recombinations[recomb_id].topic = recomb_id
+                    recombinations[recomb_id].status = "MISSING"
+                    recombinations[recomb_id].branch = "recomb-original-%s-%s" % (original_branch, original_changes[recomb_id].revision)
                     recombinations[recomb_id].diversity_change = diversity_change
+
 
             for recomb_id in ids:
                 log.debugvar('recomb_id')
@@ -282,9 +267,11 @@ class Project(object):
     def get_recombination_by_patch_change(self, patches_change_id):
         infos = self.patches_remote.get_changes_info([patches_change_id], search_field='topic', key_field='topic')
         if patches_change_id in infos:
-            recombination = Recombination(self.underlayer, 'replica-mutation', remote=self.recomb_remote, patches_remote=self.patches_remote, infos=infos[patches_change_id])
+            # Load existing
+            recombination = Recombination(self.underlayer, remote=self.recomb_remote, patches_remote=self.patches_remote, infos=infos[patches_change_id])
         else:
-            recombination = Recombination(self.underlayer, 'replica-mutation', remote=self.recomb_remote)
+            # Create new with missing status
+            recombination = Recombination(self.underlayer, strategy="change-by-change", recomb_type='replica-mutation', remote=self.recomb_remote)
             mutation_change = self.patches_remote.get_changes_by_id([patches_change_id])[patches_change_id]
             patches_branch = mutation_change.branch
 
@@ -313,50 +300,20 @@ class Project(object):
             for patches_change_id in patches_changes:
                 recombination = self.get_recombination_by_patch_change(patches_change_id)
                 # TODO: handle new patchset on same branch-patches review.
-                if recombination.status == "MISSING":
-                    recombination.test()
-                    # log.error("Recombination attempt unsuccessful")
-                    try:
-                        recombination.upload()
-                    except UploadError:
-                        log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
-                        raise UploadError
-                elif recombination.status == "APPROVED":
-                    log.warning("Master patches recombination approved as number %s and waiting for submission" % recombination.number)
-                else:
-                    log.warning("Master patches recombination present as number %s and waiting for approval" % recombination.number)
+                recombination.handle_status()
 
     def scan_patches_branch(self, replica_branch):
         branch_patches = 'recomb-patches-%s.*' % replica_branch
         infos = self.replica_remote.get_approved_change_infos(branch_patches)
         for change_number in infos:
-            recombination = Recombination(self.underlayer, 'replica-mutation', remote=self.recomb_remote, patches_remote=self.patches_remote, infos=infos[change_number])
-            self.merge_replica_mutation_recombination(recombination, replica_branch)
-
-    def merge_replica_mutation_recombination(self, recombination, replica_branch):
-        if recombination.mutation_change.status != "MERGED":
-            try:
-                recombination.mutation_change.approve()
-                recombination.mutation_change.submit()
-            except RecombinationApproveError:
-                log.error("Originating change approval failed")
-            except RecombinationSubmitError:
-                log.error("Originating change submission failed")
-        self.update_target_branch(recombination, replica_branch)
-        if recombination.status != "MERGED":
-            recombination.submit()
-        else:
-            log.warning("Recombination already submitted")
-        # update existing recombination from upstream changes
-        # for change in midstream_gerrit.gather_current_merges(patches_revision):
-        #    local_repo.merge_fortests(change['upstream_revision'], patches_revision)
-        #    upload new patchset with updated master-patches and updated message on midstream changes with old master_patches
+            recombination = Recombination(self.underlayer, remote=self.recomb_remote, patches_remote=self.patches_remote, infos=infos[change_number])
+            recombination.handle_status()
 
     def check_approved_recombinations(self, recombination=None):
         if recombination:
             if recombination.recomb_type == 'replica-mutation':
-                self.merge_replica_mutation_recombination(recombination)
-            elif recombination.recomb_type == 'original-diversity':
+                recombination.handle_status()
+            elif recombination.recomb_type == 'original-diversity' or recombination.recomb_type == "evolution-diversity":
                 return self.scan_original_distance(branch=recombination.original.branch)
         else:
             for branch in self.original_branches:

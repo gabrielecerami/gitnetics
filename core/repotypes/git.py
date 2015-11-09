@@ -140,7 +140,7 @@ class LocalRepo(Git):
         for branch in branches:
             shell('git push %s :%s' % (remote_name,branch))
 
-    def recombine(self, recomb_data, recombination_branch):
+    def recombine(self, recomb_data, recombination_branch, permanent_patches=None):
 
         shell('git fetch replica')
         shell('git fetch original')
@@ -154,7 +154,9 @@ class LocalRepo(Git):
         patches_source_name = recomb_data['sources']['patches']['name']
         main_branch = recomb_data['sources']['main']['branch']
         patches_branch = recomb_data['sources']['patches']['branch']
-        target_replacement_branch = recomb_data['target-replacement-branch']
+        if recomb_data['strategy'] == "change-by-change":
+            target_replacement_branch = recomb_data['target-replacement-branch']
+
 
         # Branch prep
         # local patches branch
@@ -182,6 +184,8 @@ class LocalRepo(Git):
             ancestor = cmd.output[0]
             cmd = shell('git rev-list --reverse --first-parent %s..remotes/replica/%s' % (ancestor, recomb_data['sources']['patches']['branch']))
             patches_removal_queue = cmd.output
+            if permament_patches:
+                patches_removal_queue = patches_removal_queue - permanent_patches
             for commit in cmd.output:
                 cmd = shell('git show --pretty=format:"" %s' % commit, show_stdout=False )
                 diff = '\n'.join(cmd.output)
@@ -251,7 +255,6 @@ class LocalRepo(Git):
                 shell('git push replica :%s' % patches_branch)
                 shell('git push replica %s:refs/heads/%s' % (retry_branch, patches_branch))
                 shell('git branch -D %s' % retry_branch)
-            recomb_data['target-replacement-branch'] = target_replacement_branch
 
             fd, commit_message_filename = tempfile.mkstemp(prefix="recomb-", suffix=".yaml", text=True)
             os.close(fd)
@@ -272,16 +275,18 @@ class LocalRepo(Git):
                     break
             os.unlink(commit_message_filename)
 
-            # Create target branch replacement for this recombination
-            shell('git checkout -B %s %s' % (target_replacement_branch, starting_revision))
-            cmd = shell("git merge --log --no-edit %s %s" % (pick_revision, retry_merge_revision))
-            if cmd.returncode == 0:
-                shell('git push replica HEAD:%s' % target_replacement_branch)
+            if recomb_data['strategy'] == "change-by-change":
+                # Create target branch replacement for this recombination
+                shell('git checkout -B %s %s' % (target_replacement_branch, starting_revision))
+                cmd = shell("git merge --log --no-edit %s %s" % (pick_revision, retry_merge_revision))
+                if cmd.returncode == 0:
+                    shell('git push replica HEAD:%s' % target_replacement_branch)
 
         shell('git checkout parking')
         #shell('git branch -D %s' % recombination_branch)
         shell('git branch -D recomb_attempt-%s-base' % patches_branch)
-        shell('git branch -D %s' % target_replacement_branch)
+        if recomb_data['strategy'] == "change-by-change":
+            shell('git branch -D %s' % target_replacement_branch)
 
     def remove_commits(self, branch, removed_commits, remote=''):
         shell('git branch --track %s%s %s' (remote, branch, branch))

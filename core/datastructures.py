@@ -76,7 +76,7 @@ class Change(object):
 
 class Recombination(Change):
 
-    def __init__(self, underlayer, recomb_type, remote=None, replica_remote=None, original_remote=None, patches_remote=None, infos=None):
+    def __init__(self, underlayer, recomb_type=None, remote=None, replica_remote=None, original_remote=None, patches_remote=None, infos=None):
         self.underlayer = underlayer
         self.removed_commits = None
         if original_remote:
@@ -107,6 +107,13 @@ class Recombination(Change):
                     self.diversity_change = Change(remote=patches_remote)
                 except NameError:
                     raise MissingInfoError
+            elif self.recomb_type == 'evolution-diversity':
+                try:
+                    self.evolution_change = Change(remote=original_remote)
+                    self.diversity_change = Change(remote=patches_remote)
+                except NameError:
+                    raise MissingInfoError
+            self.strategy = strategy
 
 
     def decode_subject(self, original_remote=None, replica_remote=None, patches_remote=None):
@@ -122,6 +129,7 @@ class Recombination(Change):
 
         recomb_header = header.split('/')[0]
         self.recomb_type = re.sub(':[a-zA-Z0-9]{6}', '',recomb_header)
+        self.replication_strategy = recomb_data['replication-strategy']
         if self.recomb_type == 'replica-mutation':
             self.replica_change = self.underlayer.get_changes_by_id([recomb_sources['main']['id']], branch=recomb_sources['main']['branch'])[recomb_sources['main']['id']]
             self.mutation_change = self.patches_remote.get_changes_by_id([recomb_sources['patches']['id']])[recomb_sources['patches']['id']]
@@ -130,10 +138,16 @@ class Recombination(Change):
             # Set real commit as revision
             self.original_change.revision = recomb_sources['main']['revision']
             self.diversity_change = self.underlayer.get_changes_by_id([recomb_sources['patches']['id']], branch=recomb_sources['patches']['branch'])[recomb_sources['patches']['id']]
+        elif self.recomb_type == 'evolution-diversity':
+            self.evolution_change = self.original_remote.get_changes_by_id([recomb_sources['main']['id']], branch=recomb_sources['main']['branch'])[recomb_sources['main']['id']]
+            # Set real commit as revision
+            self.evolution_change.revision = recomb_sources['main']['revision']
+            self.diversity_change = self.underlayer.get_changes_by_id([recomb_sources['patches']['id']], branch=recomb_sources['patches']['branch'])[recomb_sources['patches']['id']]
 
-        if 'target-replacement-branch' not in recomb_data:
-            recomb_data['target-replacement-branch'] = re.sub('recomb', 'target', self.branch)
-        self.target_replacement_branch = recomb_data['target-replacement-branch']
+        if self.replication_strategy == 'change-by-change':
+            if 'target-replacement-branch' not in recomb_data:
+                recomb_data['target-replacement-branch'] = re.sub('recomb', 'target', self.branch)
+            self.target_replacement_branch = recomb_data['target-replacement-branch']
 
         self.set_recomb_data()
 
@@ -148,6 +162,11 @@ class Recombination(Change):
             patches_source = self.mutation_change
             main_source_name = 'replica'
             patches_source_name = 'mutation'
+        if self.recomb_type == 'evolution-diversity':
+            main_source = self.evolution_change
+            patches_source = self.diversity_change
+            main_source_name = 'evolution'
+            patches_source_name = 'diversity'
         else:
             log.critical("Unknown Recombination type")
             raise RecombinationTypeError
@@ -170,15 +189,13 @@ class Recombination(Change):
         }
         if self.target_replacement_branch:
             self.recomb_data['target-replacement-branch'] = self.target_replacement_branch
+        self.recomb_data['strategy'] = self.strategy
 
     def attempt(self):
         # patches_revision = self.project.get_revision(self.patches.revision)
-        self.set_recomb_data()
-        self.underlayer.recombine(self.recomb_data, self.branch)
-
-    def test(self):
         try:
-            self.attempt()
+            self.set_recomb_data()
+            self.underlayer.recombine(self.recomb_data, self.branch)
             log.debug("Merge check with master-patches successful, ready to create review")
         except AttemptError:
             raise AttemptError
@@ -189,3 +206,69 @@ class Recombination(Change):
             self.underlayer.sync_replica(replica_branch, self.original_change.revision)
         else:
             raise RecombinationTypeError
+
+    def handle_status(self):
+        if self.status == "MISSING":
+            try:
+                self.attempt()
+            except AttemptError:
+                log.error("Recombination attempt unsuccessful")
+                raise UploadError
+            try:
+                self.upload()
+            except UploadError:
+                log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
+                raise UploadError
+        if self.status == "APPROVED":
+            if self.recomb_type == 'original-diversity'
+                try:
+                    self.sync_replica(replica_branch)
+                except RecombinationSyncReplicaError:
+                    log.error("Replica could not be synced")
+                self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
+                try:
+                    self.submit()
+                except RecombinationSubmitError:
+                    log.error("Recombination not submitted")
+            elif self.recomb_type == 'evolution-diversity':
+                if self.backportid:
+                    backport = self.patches.get_changes_by_id(backportid)
+                    if backport.status == "MERGED":
+                        try:
+                            self.submit()
+                        except RecombinationSubmitError:
+                            log.error("Recombination not submitted")
+                else:
+                    backportid = self.patches.search_backport()
+                    if not backportid:
+                        try:
+                            self.patches_remote.upload()
+                        except UploadError:
+                            log.error("Mannaggai")
+            elif self.recomb_type == 'replica-mutation':
+                if self.mutation_change.status != "MERGED":
+                    try:
+                        self.mutation_change.approve()
+                        self.mutation_change.submit()
+                    except RecombinationApproveError:
+                        log.error("Originating change approval failed")
+                    except RecombinationSubmitError:
+                        log.error("Originating change submission failed")
+                self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
+                if self.status != "MERGED":
+                    self.submit()
+                else:
+                    log.warning("Recombination already submitted")
+                # update existing recombination from upstream changes
+                # for change in midstream_gerrit.gather_current_merges(patches_revision):
+                #    local_repo.merge_fortests(change['upstream_revision'], patches_revision)
+                #    upload new patchset with updated master-patches and updated message on midstream changes with old master_patches
+        if self.status == "MERGED":
+            if self.replication_type == "change-by-change":
+                log.warning("branch is out of sync with original")
+                self.sync_replica(replica_branch)
+                self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
+            elif self.replication_type == "lock-and-backports":
+                pass
+        elif self.status == "PRESENT"
+            pass
