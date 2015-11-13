@@ -13,14 +13,15 @@ class Polymerase(object):
         for project in self.projects_conf:
             self.projects_conf[project]["rev-deps"] = {}
         for project in self.projects_conf:
-            for test_dep in self.projects_conf[project]["test-deps"]:
-                rev_dep = {
-                    project : {
-                    "tags" :self.projects_conf[project]["test-deps"][test_dep],
-                    "tests":self.projects_conf[project]["replica"]["tests"]
+            if "test-teps" in self.projects_conf[project]:
+                for test_dep in self.projects_conf[project]["test-deps"]:
+                    rev_dep = {
+                        project : {
+                        "tags" :self.projects_conf[project]["test-deps"][test_dep],
+                        "tests":self.projects_conf[project]["replica"]["tests"]
+                        }
                     }
-                }
-                self.projects_conf[test_dep]["rev-deps"].update(rev_dep)
+                    self.projects_conf[test_dep]["rev-deps"].update(rev_dep)
 
         # restrict project to operate on
         projects = copy.deepcopy(projects_conf)
@@ -71,10 +72,11 @@ class Polymerase(object):
         for project_name in self.projects:
             logsummary.info('Project: %s' % project_name)
             project = self.projects[project_name]
-            try:
-                project.poll_original_branches()
-            except Exception, e:
-               logsummary.info("Problem with project %s: %s. Skipping" % (project_name, e))
+            #try:
+            #    project.poll_original_branches()
+            project.poll_original_branches()
+            #except Exception, e:
+            #   logsummary.info("Problem with project %s: %s. Skipping" % (project_name, e))
         return success
 
     def poll_replica(self, project_name=None, patches_change_id=None):

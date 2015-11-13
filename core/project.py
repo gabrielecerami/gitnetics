@@ -41,11 +41,6 @@ class Project(object):
         self.replication_strategy = project_info['replication-strategy']
         self.test_minimum_score = 0
 
-        if 'revision_lock' in self.replica_project:
-            for branch in self.replica_project['revision_lock']:
-                # no advancement will be performed past this revision on this branch
-                self.branch_limit[branch] = self.replica_project['revision_lock'][branch]
-
         # Set up local repo
         self.underlayer = LocalRepo(project_name, local_dir)
 
@@ -64,8 +59,11 @@ class Project(object):
         self.recomb_remote = self.replica_remote
         self.patches_remote = self.replica_remote
 
-        self.underlayer.add_git_remote('replica-mirror', 'github', self.replica_project['name'],fetch=fetch)
-
+        if "mirror" in project_info['replica']:
+            self.underlayer.add_git_remote('replica-mirror', project_info['replica']['mirror'], self.replica_project['name'],fetch=fetch)
+            self.mirror_remote = self.underlayer.remotes['replica-mirror']
+        else:
+            self.mirror_remote = None
 
         # Set up branches hypermap
         # get branches from original
@@ -74,7 +72,10 @@ class Project(object):
         self.replica_branches = dict()
         self.target_branches = dict()
         self.patches_branches = dict()
+        self.backports_startref = dict()
         for original_branch in self.original_branches:
+            if 'backports-start' in  self.original_project:
+                self.backports_startref[original_branch] = self.original_project['backports-start'][original_branch]
             # apply mapping to find target branch
             try:
                 replica_branch = project_info['replica']['branch-mappings'][original_branch]
@@ -97,6 +98,12 @@ class Project(object):
 
             self.recombinations[replica_branch] = None
             self.commits[replica_branch] = {}
+
+        self.ref_locks = dict()
+        if 'ref-locks' in self.replica_project:
+            for branch in self.replica_project['ref-locks']:
+                # no advancement will be performed past this revision on this branch
+                self.ref_locks[branch] = self.replica_project['ref-locks'][branch]
 
     def get_slices(self, recombinations):
         slices = {
@@ -151,11 +158,14 @@ class Project(object):
         return slices
 
     def scan_original_distance(self, original_branch):
-        log.debug("Scanning distance from original branch %s" % original_branch)
-        self.recombinations[original_branch] = self.get_recombinations_by_interval(original_branch)
-        slices = self.get_slices(self.recombinations[original_branch])
         replica_branch = self.replica_branches['original:'+ original_branch]
         target_branch = self.target_branches['original:' + original_branch]
+        log.debug("Scanning distance from original branch %s" % original_branch)
+        if self.replication_strategy == "change-by-change" and revision_exists(self.ref_locks[replica_branch], replica_branch):
+                log.info("Cannot replicate branch past the specified lock")
+
+        self.recombinations[original_branch] = self.get_recombinations_by_interval(original_branch)
+        slices = self.get_slices(self.recombinations[original_branch])
         recombinations = self.recombinations[original_branch]
 
 
@@ -190,7 +200,7 @@ class Project(object):
         for segment in slices['APPROVED']:
             for recomb_id in list(recombinations)[segment['start']:segment['end']]:
                 recombination = recombinations[recomb_id]
-                recombinaion.handle_status()
+                recombination.handle_status()
 
         # Notify of presence
         for segment in slices['PRESENT']:
@@ -212,12 +222,22 @@ class Project(object):
             self.scan_original_distance(branch)
 
     def get_recombinations_by_interval(self, original_branch):
-        revision_start = 'remotes/replica/%s' % (original_branch)
         replica_branch = self.replica_branches['original:' + original_branch]
-        revision_end = 'remotes/original/%s' % (replica_branch)
         patches_branch = self.patches_branches['original:' + original_branch]
-        diversity_refname = "remotes/replica/%s" % (patches_branch)
-        self.commits[replica_branch] = self.underlayer.get_commits(revision_start, revision_end)
+        ref_end = 'original/%s' % (original_branch)
+        diversity_refname = "replica/%s" % (patches_branch)
+
+        if self.replication_strategy == "change-by-change":
+            ref_start = 'replica/%s' % (replica_branch)
+            self.commits[replica_branch] = self.underlayer.get_commits(ref_start, ref_end)
+        elif self.replication_strategy == "lock-and-backports":
+            if original_branch in self.backports_startref:
+                ref_start = self.backports_startref[original_branch]
+            else:
+                ref_start = self.ref_locks[replica_branch]
+            self.commits[replica_branch] = self.underlayer.get_commits(ref_start, ref_end, first_parent=False, no_merges=True)
+
+
         commits = self.commits[replica_branch]
         ids = self.original_remote.get_original_ids(commits)
 
@@ -241,19 +261,21 @@ class Project(object):
                     # Set real commit as revision
                     original_changes[recomb_id].revision = ids[recomb_id]
 
-                    if self.replication_type == "change-by-change":
-                        recombinations[recomb_id] = Recombination(self.underlayer, strategy="change-by-change", recomb_type='original-diversity', remote=self.recomb_remote)
+                    if self.replication_strategy == "change-by-change":
+                        recombinations[recomb_id] = Recombination(self.underlayer, replication_strategy="change-by-change", recomb_type='original-diversity', remote=self.recomb_remote)
                         recombinations[recomb_id].target_replacement_branch = "target-original-%s-%s" % (original_branch, original_changes[recomb_id].revision)
                         recombinations[recomb_id].target_branch = "%s" % (self.target_branches['original:' + original_branch])
+                        recombinations[recomb_id].original_change = original_changes[recomb_id]
+                        recombinations[recomb_id].branch = "recomb-original-%s-%s" % (original_branch, original_changes[recomb_id].revision)
 
-                    elif self.replication_type == "lock-and-backports":
-                        recombinations[recomb_id] = Recombination(self.underlayer, strategy="lock-and-backports", recomb_type='evolution-diversity', remote=self.recomb_remote)
-                        recombinations[recomb_id].target_gerrit_branch = patches_branches["original:" + original_branch]
+                    elif self.replication_strategy == "lock-and-backports":
+                        recombinations[recomb_id] = Recombination(self.underlayer, replication_strategy="lock-and-backports", recomb_type='evolution-diversity', remote=self.recomb_remote)
+                        recombinations[recomb_id].target_gerrit_branch = self.patches_branches["original:" + original_branch]
+                        recombinations[recomb_id].evolution_change = original_changes[recomb_id]
+                        recombinations[recomb_id].branch = "recomb-evolution-%s-%s" % (original_branch, original_changes[recomb_id].revision)
 
-                    recombinations[recomb_id].original_change = original_changes[recomb_id]
                     recombinations[recomb_id].topic = recomb_id
                     recombinations[recomb_id].status = "MISSING"
-                    recombinations[recomb_id].branch = "recomb-original-%s-%s" % (original_branch, original_changes[recomb_id].revision)
                     recombinations[recomb_id].diversity_change = diversity_change
 
 
@@ -271,7 +293,7 @@ class Project(object):
             recombination = Recombination(self.underlayer, remote=self.recomb_remote, patches_remote=self.patches_remote, infos=infos[patches_change_id])
         else:
             # Create new with missing status
-            recombination = Recombination(self.underlayer, strategy="change-by-change", recomb_type='replica-mutation', remote=self.recomb_remote)
+            recombination = Recombination(self.underlayer, replication_strategy="change-by-change", recomb_type='replica-mutation', remote=self.recomb_remote)
             mutation_change = self.patches_remote.get_changes_by_id([patches_change_id])[patches_change_id]
             patches_branch = mutation_change.branch
 
@@ -382,11 +404,14 @@ class Project(object):
 
     def delete_service_branches(self):
         # cleanup github repos from recomb branches WIP
-        log.info("Deleting recomb branches from mirror for project %s" % self.project_name)
-        service_branches = self.underlayer.list_branches('replica-mirror', pattern='recomb*')
-        self.underlayer.delete_remote_branches('replica-mirror', service_branches)
-        service_branches = self.underlayer.list_branches('replica-mirror', pattern='target-*')
-        self.underlayer.delete_remote_branches('replica-mirror', service_branches)
+        if self.mirror_remote:
+            log.info("Deleting recomb branches from mirror for project %s" % self.project_name)
+            service_branches = self.underlayer.list_branches('replica-mirror', pattern='recomb*')
+            self.underlayer.delete_remote_branches('replica-mirror', service_branches)
+            service_branches = self.underlayer.list_branches('replica-mirror', pattern='target-*')
+            self.underlayer.delete_remote_branches('replica-mirror', service_branches)
+        else:
+            log.info("No mirror repository specified for the project")
 
     def delete_stale_branches(self):
         recomb_active_branches = list()

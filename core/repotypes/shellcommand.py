@@ -1,8 +1,11 @@
 import subprocess
 from ..colorlog import log
 
-def shell(commandline, show_stdout=True, show_stderr=True):
+def shell(commandline, stdin=None, show_stdout=True, show_stderr=True, remove_blank=True, output_mode="list"):
+    # TODO: implement output_mode = LIST, TEXT, SINGLE_LINE, SINGLE_VALUE
     process = subprocess.Popen(commandline, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    if stdin is not None:
+        process.stdin.write(stdin)
     process.output, process.errors = process.communicate()
     process.output = process.output.split('\n')
     process.errors = process.errors.split('\n')
@@ -24,11 +27,12 @@ def shell(commandline, show_stdout=True, show_stderr=True):
     else:
         outlog("*** Suppressed")
     log.info("---- end command")
-    # remove blank lines from output for further processing
-    while '' in process.output:
-        process.output.remove('')
-    while '' in process.errors:
-        process.errors.remove('')
+    if remove_blank:
+        # remove blank lines from output for further processing
+        while '' in process.output:
+            process.output.remove('')
+        while '' in process.errors:
+            process.errors.remove('')
     return process
 
 

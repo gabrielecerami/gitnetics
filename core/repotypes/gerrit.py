@@ -2,7 +2,7 @@
 import json
 import pprint
 import re
-import os
+import yaml
 from ..colorlog import log
 from collections import OrderedDict
 from shellcommand import shell
@@ -44,14 +44,22 @@ class Gerrit(object):
             return True
         return False
 
-    def upload_change(self, branch, topic):
+    def upload_change(self, branch, topic, reviewers=None):
+        command = 'git push %s HEAD:refs/drafts/%s/%s' % (self.name, branch, topic)
+        if reviewers:
+            command = "%s%%" % command
+            for reviewer in reviewers:
+                command = "r=%s," % reviewer
+            command.rstrip(',')
+
         shell('git checkout %s' % branch)
-        cmd = shell('git review -D -r %s -t "%s" %s' % (self.name, topic, branch))
-        for line in cmd.output:
-            if 'Nothing to do' in line:
-                log.debug("trying alternative upload method")
-                shell("git push %s HEAD:refs/drafts/%s/%s" % (self.name, branch, topic))
-                break
+        #cmd = shell('git review -D -r %s -t "%s" %s' % (self.name, topic, branch))
+        #for line in cmd.output:
+        #    if 'Nothing to do' in line:
+        #        log.debug("trying alternative upload method")
+        #        shell("git push %s HEAD:refs/drafts/%s/%s" % (self.name, branch, topic))
+        #        break
+        shell(command)
         cmd = shell('ssh %s gerrit query --current-patch-set --format json "topic:%s AND status:open"' % (self.host, topic))
         shell('git checkout parking')
         log.debug(pprint.pformat(cmd.output))
@@ -62,6 +70,19 @@ class Gerrit(object):
         infos = self.normalize_infos(gerrit_infos)
         change = Change(infos=infos)
         return change
+
+    def comment_change(self, number, patchset, comment_message, verified=None, code_review=None):
+        review_input = dict()
+        review_input['labels'] = dict()
+        review_input['message'] = comment_message
+        if code_review:
+            review_input['labels']['Code-Review'] = verified
+        if verified:
+            review_input['labels']['Verified'] = verified
+
+        json_input = json.dumps(review_input, ensure_ascii=False)
+
+        cmd = shell("echo '%s' | ssh %s gerrit review --json %s,%s" % (json_input, self.host, number, patchset))
 
     def get_query_string(self, criteria, ids, branch=None):
         query_string = '\(%s:%s' % (criteria, ids[0])
@@ -109,12 +130,20 @@ class Gerrit(object):
         infos['number'] = gerrit_infos['number']
         infos['status'] = gerrit_infos['status']
         infos['approvals'] = None
+        infos['url'] = gerrit_infos['url']
+        infos['commit-message'] = gerrit_infos['commitMessage']
         if 'approvals' in gerrit_infos['currentPatchSet']:
             infos['approvals'] = gerrit_infos['currentPatchSet']['approvals']
         if gerrit_infos['status'] == 'NEW' or gerrit_infos['status'] == 'DRAFT':
             infos['status'] = 'PRESENT'
-        if gerrit_infos['status'] != "MERGED" and self.approved(infos):
+        elif gerrit_infos['status'] != "MERGED" and self.approved(infos):
             infos['status'] = "APPROVED"
+        elif gerrit_infos['status'] == "ABANDONED":
+            infos['status'] = "ABANDONED"
+        try:
+            infos['metadata'] = yaml.load(self.commit_message)
+        except ValueError:
+            log.error("commit message not in yaml")
 
         return infos
 

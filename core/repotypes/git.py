@@ -5,8 +5,10 @@ import os
 import tempfile
 import yaml
 import shutil
+import re
+from ..utils import *
 from shellcommand import shell
-from ..datastructures import Change
+from ..datastructures import Change, RecombinationFailed
 from gerrit import Gerrit
 from ..colorlog import log, logsummary
 
@@ -19,14 +21,20 @@ class MergeError(Exception):
 class RemoteFetchError(Exception):
     pass
 
+
+yaml.add_representer(folded_unicode, folded_unicode_representer)
+yaml.add_representer(literal_unicode, literal_unicode_representer)
+
+
 class Git(object):
 
-    def get_revision(self, revision_name):
-        cmd = shell('git rev-parse %s' % revision_name)
+    def get_revision(self, ref):
+        # works with both tags and branches
+        cmd = shell('git rev-list -n 1 %s' % ref)
         revision = cmd.output[0].rstrip('\n')
         return revision
 
-    def get_commits(self, revision_start, revision_end, first_parent=True, reverse=True):
+    def get_commits(self, revision_start, revision_end, first_parent=True, reverse=True, no_merges=False):
         options = ''
         commit_list = list()
         log.debug("Interval: %s..%s" % (revision_start, revision_end))
@@ -37,6 +45,8 @@ class Git(object):
             options = '%s --reverse' % options
         if first_parent:
             options = '%s --first-parent' % options
+        if no_merges:
+            options = '%s --no-merges' % options
         cmd = shell('git rev-list %s --pretty="%%H" %s..%s | grep -v ^commit' % (options, revision_start, revision_end))
 
         for commit_hash in cmd.output:
@@ -83,7 +93,13 @@ class LocalRepo(Git):
         except OSError:
             pass
         os.chdir(self.directory)
-        shell('git init')
+        try:
+            os.stat(".git")
+        except OSError:
+            shell('git init')
+            # Needed for big diffs
+            shell('git config diff.renames copy')
+            shell('git config diff.renamelimit 10000')
         # TODO: remove all local branches
         # git for-each-ref --format="%(refname)" refs/heads | sed -e "s/refs\/heads//"
         # for branch in local_branches:
@@ -140,28 +156,86 @@ class LocalRepo(Git):
         for branch in branches:
             shell('git push %s :%s' % (remote_name,branch))
 
-    def recombine(self, recomb_data, recombination_branch, permanent_patches=None):
+
+    def suggest_conflict_solution(self, recomb_data):
+        patches_branch = recomb_data['sources']['patches']['branch']
+        pick_revision = recomb_data['sources']['main']['revision']
+
+        suggested_solution = None
+        log.info("Trying to find a possible cause")
+        cmd = shell('git show -s --pretty=format:"%%an <%%ae>" %s' % pick_revision)
+        author = cmd.output[0]
+        cmd = shell('git show -s --pretty=format:"%%at" %s' % pick_revision)
+        date = cmd.output[0]
+        cmd = shell('git log --pretty=raw --author="%s" | grep -B 3 "%s" | grep commit\  | sed -e "s/commit //g"' % (author, date))
+        if cmd.output:
+            suggested_solution = "Commit %s from upstream was already cherry-picked as %s in %s patches branch" % (pick_revision, cmd.output[0], patches_branch)
+
+        return suggested_solution
+
+
+    def add_conflicts_string(self, conflicts, commit_message):
+        conflicts_string = "\nConflicts:\n  "
+        conflicts_string = conflicts_string + '\n  '.join([x[3:] for x in conflicts])
+        conflicts_string = conflicts_string + "\n\n"
+        return re.sub('(Change-Id: .*\n)', '%s\g<1>' % (conflicts_string),commit_message)
+
+    def format_patch(self, recomb_data, recombination_branch):
+        cmd = shell('git checkout remotes/replica/%s' % recombination_branch)
+        cmd = shell('git show --pretty=format:"" HEAD  --patch-with-stat')
+        diff = '\n'.join(cmd.output)
+        cmd = shell('git format-patch %s^..%s --stdout' % (recomb_data['source']['main']['revision'], recomb_data['source']['main']['revision']))
+        patch = '\n'.join(cmd.output)
+        rs = re.search("Subject: \[PATCH\] ", patch)
+        mpatch = patch[:rs.end()]
+        cmd = shell('git --version')
+        gitver = cmd.output[0]
+        ampatch = mpatch + recomb_data['sources']['patches']['commit-message'] + "\n---\n" + diff + "\n--\n%s\n" % gitver
+        cmd = shell('git checkout -b patches-up remotes/replica/%s' % (recomb_data['sources']['patches']['branch'])
+        cmd = shell('git am', stdin=ampatch)
+
+    def cherrypick_recombine(self, recomb_data, recombination_branch, permanent_patches=None):
+        shell('git fetch replica')
+        shell('git fetch original')
+
+        pick_revision = recomb_data['sources']['main']['revision']
+        merge_revision = recomb_data['sources']['patches']['revision']
+
+        cmd = shell('git checkout -b %s %s' % (recombination_branch, merge_revision))
+        log.info("Creating remote disposable branch on replica")
+        cmd = shell('git push replica HEAD:%s' % recombination_branch)
+
+        cmd = shell('git cherry-pick -x %s' % (pick_revision))
+        # if merge fails, push empty change, and comment with git status.
+        # TO FIND existing commit in patches (conflict resolution suggestions)
+        # for commit in $(git rev-list --reverse --max-count 1000 --no-merges remotes/original/master); do AUTHOR=$(git show -s --pretty=format:"%an <%ae>" $commit); DATE=$(git show -s --pretty=format:"%at" $commit); CORRES=$(git log --pretty=raw --author="$AUTHOR" | grep -B 3 "$DATE" | grep commit\  | sed -e "s/commit //g"); if [ ! -z $CORRES ] ; then echo $commit in original/master is present in patches as $CORRES; fi; done
+        if cmd.returncode != 0:
+            log.error("Recombination Failed")
+            cmd = shell('git status --porcelain')
+            conflicts = cmd.output
+            recomb_data['sources']['patches']['commit-message'] = literal_unicode(self.add_conflicts_string(conflicts, recomb_data['sources']['patches']['commit-message']))
+            status = '\n    '.join([''] + conflicts)
+            suggested_solution = self.suggest_conflict_solution(recomb_data)
+            cmd = shell('git cherry-pick --abort')
+            self.commit_recomb(recomb_data)
+            raise RecombinationFailed(status, suggested_solution)
+
+    def merge_recombine(self, recomb_data, recombination_branch):
 
         shell('git fetch replica')
         shell('git fetch original')
 
         pick_revision = recomb_data['sources']['main']['revision']
-        #pick_branch = main_source.branch
-        cmd = shell('git rev-parse %s~1' % pick_revision)
-        starting_revision = cmd.output[0]
         merge_revision = recomb_data['sources']['patches']['revision']
-        main_source_name = recomb_data['sources']['main']['name']
-        patches_source_name = recomb_data['sources']['patches']['name']
-        main_branch = recomb_data['sources']['main']['branch']
         patches_branch = recomb_data['sources']['patches']['branch']
-        if recomb_data['strategy'] == "change-by-change":
-            target_replacement_branch = recomb_data['target-replacement-branch']
-
+        target_replacement_branch = recomb_data['target-replacement-branch']
 
         # Branch prep
         # local patches branch
         shell('git checkout -B recomb_attempt-%s-base %s' % (patches_branch, merge_revision))
         # local recomb branch
+        cmd = shell('git rev-parse %s~1' % pick_revision)
+        starting_revision = cmd.output[0]
         shell('git checkout -B %s %s' % (recombination_branch, starting_revision))
         log.info("Creating remote disposable branch on replica")
         cmd = shell('git push replica HEAD:%s' % recombination_branch)
@@ -184,8 +258,6 @@ class LocalRepo(Git):
             ancestor = cmd.output[0]
             cmd = shell('git rev-list --reverse --first-parent %s..remotes/replica/%s' % (ancestor, recomb_data['sources']['patches']['branch']))
             patches_removal_queue = cmd.output
-            if permament_patches:
-                patches_removal_queue = patches_removal_queue - permanent_patches
             for commit in cmd.output:
                 cmd = shell('git show --pretty=format:"" %s' % commit, show_stdout=False )
                 diff = '\n'.join(cmd.output)
@@ -198,8 +270,8 @@ class LocalRepo(Git):
         else:
             log.info("Merge successful")
 
-
         retry_branch = None
+
         while merge.returncode != 0 and patches_removal_queue:
             attempt_number += 1
 
@@ -256,37 +328,44 @@ class LocalRepo(Git):
                 shell('git push replica %s:refs/heads/%s' % (retry_branch, patches_branch))
                 shell('git branch -D %s' % retry_branch)
 
-            fd, commit_message_filename = tempfile.mkstemp(prefix="recomb-", suffix=".yaml", text=True)
-            os.close(fd)
-            with open(commit_message_filename, 'w') as commit_message_file:
-                # We have to be sure this is the first line in yaml document
-                commit_message_file.write("Recombination: %s:%s-%s:%s/%s\n\n" % (main_source_name, pick_revision[:6], patches_source_name, merge_revision[:6], recomb_data['sources']['main']['branch']))
-                yaml.safe_dump(recomb_data, commit_message_file, default_flow_style=False, indent=4, canonical=False, default_style=False)
+            self.commit_recomb(recomb_data)
 
-            cmd = shell("git commit -F %s" % (commit_message_filename))
-            # If two changes with the exact content are merged upstream
-            # the above command will succeed but nothing will be committed.
-            # and recombination upload will fail due to no change.
-            # this assures that we will always commit something to upload
-            for line in cmd.output:
-                if 'nothing to commit' in line:
-                    shell("git commit --allow-empty -F %s" % (commit_message_filename))
-                    logsummary.warning('Contents in commit %s have been merged twice in upstream' % pick_revision)
-                    break
-            os.unlink(commit_message_filename)
-
-            if recomb_data['strategy'] == "change-by-change":
-                # Create target branch replacement for this recombination
-                shell('git checkout -B %s %s' % (target_replacement_branch, starting_revision))
-                cmd = shell("git merge --log --no-edit %s %s" % (pick_revision, retry_merge_revision))
-                if cmd.returncode == 0:
-                    shell('git push replica HEAD:%s' % target_replacement_branch)
+            # Create target branch replacement for this recombination
+            shell('git checkout -B %s %s' % (target_replacement_branch, starting_revision))
+            cmd = shell("git merge --log --no-edit %s %s" % (pick_revision, retry_merge_revision))
+            if cmd.returncode == 0:
+                shell('git push replica HEAD:%s' % target_replacement_branch)
 
         shell('git checkout parking')
         #shell('git branch -D %s' % recombination_branch)
         shell('git branch -D recomb_attempt-%s-base' % patches_branch)
-        if recomb_data['strategy'] == "change-by-change":
-            shell('git branch -D %s' % target_replacement_branch)
+        shell('git branch -D %s' % target_replacement_branch)
+
+    def commit_recomb(self, recomb_data):
+        pick_revision = recomb_data['sources']['main']['revision']
+        merge_revision = recomb_data['sources']['patches']['revision']
+        main_source_name = recomb_data['sources']['main']['name']
+        patches_source_name = recomb_data['sources']['patches']['name']
+
+        fd, commit_message_filename = tempfile.mkstemp(prefix="recomb-", suffix=".yaml", text=True)
+        os.close(fd)
+        with open(commit_message_filename, 'w') as commit_message_file:
+            # We have to be sure this is the first line in yaml document
+            commit_message_file.write("Recombination: %s:%s-%s:%s/%s\n\n" % (main_source_name, pick_revision[:6], patches_source_name, merge_revision[:6], recomb_data['sources']['main']['branch']))
+            yaml.dump(recomb_data, commit_message_file, default_flow_style=False, indent=4, canonical=False, default_style=False)
+
+        cmd = shell("git commit -F %s" % (commit_message_filename))
+        # If two changes with the exact content are merged upstream
+        # the above command will succeed but nothing will be committed.
+        # and recombination upload will fail due to no change.
+        # this assures that we will always commit something to upload
+        for line in cmd.output:
+            if 'nothing to commit' in line:
+                shell("git commit --allow-empty -F %s" % (commit_message_filename))
+                logsummary.warning('Contents in commit %s have been merged twice in upstream' % pick_revision)
+                break
+        os.unlink(commit_message_filename)
+        raise Error
 
     def remove_commits(self, branch, removed_commits, remote=''):
         shell('git branch --track %s%s %s' (remote, branch, branch))
