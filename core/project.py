@@ -255,7 +255,7 @@ class Project(object):
             for recomb_id in ids:
                 if recomb_id in recomb_infos:
                     # relative recombination exists, load informations
-                        recombinations[recomb_id] = Recombination(self.underlayer, remote=self.recomb_remote, infos=recomb_infos[recomb_id], original_remote=self.original_remote)
+                        recombinations[recomb_id] = Recombination(self.underlayer, remote=self.recomb_remote, infos=recomb_infos[recomb_id], original_remote=self.original_remote, patches_remote=self.patches_remote)
                 else:
                     # relative recombination missing, creating empty one
                     # Set real commit as revision

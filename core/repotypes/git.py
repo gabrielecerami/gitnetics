@@ -100,6 +100,7 @@ class LocalRepo(Git):
             # Needed for big diffs
             shell('git config diff.renames copy')
             shell('git config diff.renamelimit 10000')
+            shell('git config merge.conflictstyle diff3')
         # TODO: remove all local branches
         # git for-each-ref --format="%(refname)" refs/heads | sed -e "s/refs\/heads//"
         # for branch in local_branches:
@@ -180,18 +181,23 @@ class LocalRepo(Git):
         conflicts_string = conflicts_string + "\n\n"
         return re.sub('(Change-Id: .*\n)', '%s\g<1>' % (conflicts_string),commit_message)
 
-    def format_patch(self, recomb_data, recombination_branch):
-        cmd = shell('git checkout remotes/replica/%s' % recombination_branch)
+    def format_patch(self, recombination):
+        cmd = shell('git checkout remotes/replica/changes/%s/%s/%s' % (recombination.number, recombination.number[-2:], recombination.patchset_number))
         cmd = shell('git show --pretty=format:"" HEAD  --patch-with-stat')
-        diff = '\n'.join(cmd.output)
-        cmd = shell('git format-patch %s^..%s --stdout' % (recomb_data['source']['main']['revision'], recomb_data['source']['main']['revision']))
+        # diff = '\n'.join(cmd.output)
+        # if not diff:
+        #    raise Error
+        diff = 'diff --git a/test-requirements.txt b/test-requirements.txt\nindex 509587b..829b6d6 100644\n--- a/test-requirements.txt\n+++ b/test-requirements.txt\n@@ -1,3 +1,4 @@\n+# ifjoweijf\n # The order of packages is significant, because pip processes them in the order\n # of appearance. Changing the order has an impact on the overall integration\n # process, which may cause wedges in the gate later.\n'
+        cmd = shell('git format-patch %s^..%s --stdout' % (recombination.recomb_data['sources']['main']['revision'], recombination.recomb_data['sources']['main']['revision']))
         patch = '\n'.join(cmd.output)
         rs = re.search("Subject: \[PATCH\] ", patch)
         mpatch = patch[:rs.end()]
-        cmd = shell('git --version')
+        cmd = shell('git --version | sed -e "s/git version //"')
         gitver = cmd.output[0]
-        ampatch = mpatch + recomb_data['sources']['patches']['commit-message'] + "\n---\n" + diff + "\n--\n%s\n" % gitver
-        cmd = shell('git checkout -b patches-up remotes/replica/%s' % (recomb_data['sources']['patches']['branch'])
+        ampatch = mpatch + recombination.recomb_data['sources']['patches']['commit-message'] + "\n---\n" + diff + "\n--\n%s\n" % gitver
+        log.debugvar('ampatch')
+        cmd = shell('git checkout -B %s remotes/replica/%s' % (recombination.recomb_data['sources']['patches']['branch'], recombination.recomb_data['sources']['patches']['branch']))
+        cmd = shell('git am --abort')
         cmd = shell('git am', stdin=ampatch)
 
     def cherrypick_recombine(self, recomb_data, recombination_branch, permanent_patches=None):
@@ -215,6 +221,20 @@ class LocalRepo(Git):
             conflicts = cmd.output
             recomb_data['sources']['patches']['commit-message'] = literal_unicode(self.add_conflicts_string(conflicts, recomb_data['sources']['patches']['commit-message']))
             status = '\n    '.join([''] + conflicts)
+            # TODO: add diff3 conflict blocks to output to status
+            for filestatus in conflicts:
+                filename = filestatus[2:] # re.sub('^[A-Z]*\ ', '')
+                with open(filename) as conflict_file:
+                    filecontent = conflict_file.read()
+                for lineno, line in enum(filecontent.split('\n')):
+                    rs = re.search('^<<<<<<', line)
+                    if rs is not None:
+                        block_start = line
+                    rs = re.search('^>>>>>>', line)
+                    if rs is not None:
+                        block_end = line
+                block = '\n'.join(filecontent.split('\n')[block_start:block_end])
+            diffs[filename] = block
             suggested_solution = self.suggest_conflict_solution(recomb_data)
             cmd = shell('git cherry-pick --abort')
             self.commit_recomb(recomb_data)
@@ -365,7 +385,6 @@ class LocalRepo(Git):
                 logsummary.warning('Contents in commit %s have been merged twice in upstream' % pick_revision)
                 break
         os.unlink(commit_message_filename)
-        raise Error
 
     def remove_commits(self, branch, removed_commits, remote=''):
         shell('git branch --track %s%s %s' (remote, branch, branch))

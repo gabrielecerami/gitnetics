@@ -83,6 +83,11 @@ class Change(object):
             return False
         return True
 
+    def abandon(self):
+        if self.status == "DRAFT":
+            self.publish(self.number, self.patchset_number)
+        self.remote.abandon(self.number, self.patchset_number)
+
     def comment(self, comment_message, verified=None, code_review=None):
         self.remote.comment_change(self.number, self.patchset_number, comment_message, verified=verified, code_review=code_review)
 
@@ -91,6 +96,7 @@ class Recombination(Change):
     def __init__(self, underlayer, replication_strategy='change-by-change', recomb_type=None, remote=None, replica_remote=None, original_remote=None, patches_remote=None, infos=None):
         self.underlayer = underlayer
         self.removed_commits = None
+        self.backportid = None
         if original_remote:
             self.original_remote = original_remote
         if replica_remote:
@@ -131,19 +137,17 @@ class Recombination(Change):
                     raise MissingInfoError
             self.replication_strategy = replication_strategy
             self.recombine_status = "UNATTEMPTED"
+        ch['comments'][-4]['message'].split('\n'):
 
 
     def load_metadata(self, original_remote=None, replica_remote=None, patches_remote=None):
         log.debug(self.commit_message)
-
-            raise DecodeError
-
-        recomb_sources = recomb_data['sources']
-        header = recomb_data['Recombination']
+        recomb_sources = self.metadata['sources']
+        header = self.metadata['Recombination']
 
         recomb_header = header.split('/')[0]
         self.recomb_type = re.sub(':[a-zA-Z0-9]{6}', '',recomb_header)
-        self.replication_strategy = recomb_data['replication-strategy']
+        self.replication_strategy = self.metadata['replication-strategy']
         if self.recomb_type == 'replica-mutation':
             self.replica_change = self.underlayer.get_changes_by_id([recomb_sources['main']['id']], branch=recomb_sources['main']['branch'])[recomb_sources['main']['id']]
             self.mutation_change = self.patches_remote.get_changes_by_id([recomb_sources['patches']['id']])[recomb_sources['patches']['id']]
@@ -159,16 +163,21 @@ class Recombination(Change):
             self.diversity_change = self.underlayer.get_changes_by_id([recomb_sources['patches']['id']], branch=recomb_sources['patches']['branch'])[recomb_sources['patches']['id']]
 
         if self.replication_strategy == 'change-by-change':
-            if 'target-replacement-branch' not in recomb_data:
-                recomb_data['target-replacement-branch'] = re.sub('recomb', 'target', self.branch)
-            self.target_replacement_branch = recomb_data['target-replacement-branch']
+            if 'target-replacement-branch' not in self.metadata:
+                self.metadata['target-replacement-branch'] = re.sub('recomb', 'target', self.branch)
+            self.target_replacement_branch = self.metadata['target-replacement-branch']
         elif self.replication_strategy == 'lock-and-backports':
-            self.patches_commit_message = recomb_data['sources']['patches']['commit_message']
+            self.patches_commit_message = self.metadata['sources']['patches']['commit-message']
 
-        if 'recombine-status' in recomb_data:
-            if recomb_data['recombine-status'] == "DISCARDED":
-                if self.status == "ABANDONED"
-                self.recombine_status = recomb_data['recombine-status']
+        if 'recombine-status' in self.metadata:
+            self.recombine_status = self.metadata['recombine-status']
+            if self.metadata['recombine-status'] == "DISCARDED":
+                if self.status == "ABANDONED":
+                    pass
+
+        if 'backportid' in self.metadata:
+            self.backportid = self.metadata['backportid']
+
 
         self.set_recomb_data()
 
@@ -205,13 +214,15 @@ class Recombination(Change):
                     "branch": patches_source.branch,
                     "revision": patches_source.revision,
                     "id": patches_source.uuid
-                }
-            "recombine-status": self.recombine_status
-            }
+                },
+            },
+            "recombine-status": self.recombine_status,
         }
         if self.replication_strategy == "change-by-change":
             self.recomb_data['target-replacement-branch'] = self.target_replacement_branch
         self.recomb_data['replication-strategy'] = self.replication_strategy
+        if 'commit-message' in self.metadata['sources']['patches']:
+            self.recomb_data['sources']['patches']['commit-message'] = self.metadata['sources']['patches']['commit-message']
 
     def mangle_commit_message(self, commit_message):
         upstream_string = "\nUpstream-%s: %s\n" % (self.evolution_change.branch, self.evolution_change.url)
@@ -242,6 +253,32 @@ class Recombination(Change):
             self.underlayer.sync_replica(replica_branch, self.original_change.revision)
         else:
             raise RecombinationTypeError
+
+    def amend(self):
+        self.underlayer.amend(message=recomb_data)
+        self.upload_change(self.number, self.patchset_number)
+
+    def analyze_comments(self, info):
+        comment_data = dict()
+        if self.comments:
+            for comment in self.comments:
+                try:
+                    data = yaml.load(self.comment())
+                    comment_data['values'] = data
+                except ScannerError, ParserError, ValueError:
+                    for line in comment.split('\n')
+                        for cc in comment_commands:
+                            rs = re.search('^%s$' % cc, line)
+                            if rs is not None:
+                                comment_data['action'] == cc
+        return comment_data
+
+    def safe_abandon(self, reason):
+        if not reason:
+            log.error("you cannot abandon without recombine status")
+        self.recomb_data['recombine_status'] = reason
+        self.amend(recomb_data)
+        super(Recombination, self).abandon()
 
     def handle_status(self):
         if self.status == "MISSING":
@@ -313,14 +350,17 @@ If you decide to discard this pick instead, please comment to this change with a
                         except RecombinationAbandonedError:
                             log.error("Recombination not abandoned")
                 else:
-                    backportid = self.patches.search_backport()
+                    # A possible approach is to search original author/timestamp
+                    # backportid = self.patches.search_backport()
+                    backportid = None
                     if not backportid:
                         try:
-                            self.underlayer.format_patch(self.branch)
-                            backportid = self.patches_remote.upload(self.original_change, branch=self.patches_branch)
+                            self.underlayer.format_patch(self)
+                            backport = self.patches_remote.upload_change(self.recomb_data['sources']['patches']['branch'],'automated_proposal', reviewers=["whayutin@redhat.com"], successremove=False)
                         except UploadError:
                             log.error("Mannaggai")
-                    self.add_message(backportid)
+                        self.recomb_data['patches-review']  = backport.uuid
+                        self.amend()
             elif self.recomb_type == 'replica-mutation':
                 if self.mutation_change.status != "MERGED":
                     try:
@@ -349,6 +389,10 @@ If you decide to discard this pick instead, please comment to this change with a
         elif self.status == "PRESENT":
             if self.replication_strategy == "lock-and-backports":
                 if self.recombine_status == "BLOCKED":
+                    comment_data = handle_comments()
+                    if comment_data['action'] == "DISCARD":
+                        self.safe_abandon(reason="DISCARDED by user")
                     self.check_metadata()
-                elif self.recombine_status == ""
+                elif self.recombine_status == "":
+                    pass
 

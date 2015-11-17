@@ -44,12 +44,18 @@ class Gerrit(object):
             return True
         return False
 
-    def upload_change(self, branch, topic, reviewers=None):
+    def publish_change(self., number, patchset):
+        shell('ssh %s gerrit review --publish --project %s %s,%s' % (self.host, self.project_name, number, patchset))
+
+    def abandon_change(self., number, patchset):
+        shell('ssh %s gerrit review --abandon --project %s %s,%s' % (self.host, self.project_name, number, patchset))
+
+    def upload_change(self, branch, topic, reviewers=None, successremove=True):
         command = 'git push %s HEAD:refs/drafts/%s/%s' % (self.name, branch, topic)
         if reviewers:
             command = "%s%%" % command
             for reviewer in reviewers:
-                command = "r=%s," % reviewer
+                command = command + "r=%s," % reviewer
             command.rstrip(',')
 
         shell('git checkout %s' % branch)
@@ -63,7 +69,7 @@ class Gerrit(object):
         cmd = shell('ssh %s gerrit query --current-patch-set --format json "topic:%s AND status:open"' % (self.host, topic))
         shell('git checkout parking')
         log.debug(pprint.pformat(cmd.output))
-        if not cmd.output[:-1]:
+        if not cmd.output[:-1] and successremove:
             shell('git push replica :%s' % branch)
             return None
         gerrit_infos = json.loads(cmd.output[:-1][0])
@@ -124,25 +130,27 @@ class Gerrit(object):
         infos['branch'] = gerrit_infos['branch']
         infos['id'] = gerrit_infos['id']
         infos['previous-commit'] = infos['parent']
-        infos['subject'] = gerrit_infos['commitMessage']
         if 'topic' in gerrit_infos:
             infos['topic'] = gerrit_infos['topic']
         infos['number'] = gerrit_infos['number']
         infos['status'] = gerrit_infos['status']
         infos['approvals'] = None
         infos['url'] = gerrit_infos['url']
+        infos['comments'] = None
+        if 'comments' in gerrit_infos['comments']:
+            infos['comments'] = gerrit_infos['comments']
         infos['commit-message'] = gerrit_infos['commitMessage']
         if 'approvals' in gerrit_infos['currentPatchSet']:
             infos['approvals'] = gerrit_infos['currentPatchSet']['approvals']
         if gerrit_infos['status'] == 'NEW' or gerrit_infos['status'] == 'DRAFT':
             infos['status'] = 'PRESENT'
-        elif gerrit_infos['status'] != "MERGED" and self.approved(infos):
+        if gerrit_infos['status'] != "MERGED" and self.approved(infos):
             infos['status'] = "APPROVED"
-        elif gerrit_infos['status'] == "ABANDONED":
+        if gerrit_infos['status'] == "ABANDONED":
             infos['status'] = "ABANDONED"
         try:
-            infos['metadata'] = yaml.load(self.commit_message)
-        except ValueError:
+            infos['metadata'] = yaml.load(infos['commit-message'])
+        except (ValueError, yaml.scanner.ScannerError,yaml.parser.ParserError):
             log.error("commit message not in yaml")
 
         return infos

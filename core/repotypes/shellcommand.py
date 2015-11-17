@@ -3,7 +3,7 @@ from ..colorlog import log
 
 def shell(commandline, stdin=None, show_stdout=True, show_stderr=True, remove_blank=True, output_mode="list"):
     # TODO: implement output_mode = LIST, TEXT, SINGLE_LINE, SINGLE_VALUE
-    process = subprocess.Popen(commandline, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    process = subprocess.Popen(commandline, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
     if stdin is not None:
         process.stdin.write(stdin)
     process.output, process.errors = process.communicate()
