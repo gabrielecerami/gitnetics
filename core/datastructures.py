@@ -1,28 +1,11 @@
-import sys
-import os
 import yaml
 import re
 from colorlog import log
 from utils import *
+from exceptions import *
 
-
-class DecodeError(Exception):
-    pass
-
-class UploadError(Exception):
-    pass
-
-class SubmitError(Exception):
-    pass
-
-class PushMergeError(Exception):
-    pass
-
-class AttemptError(Exception):
-    pass
-
-class RecombinationFailed(Exception):
-    pass
+yaml.add_representer(folded_unicode, folded_unicode_representer)
+yaml.add_representer(literal_unicode, literal_unicode_representer)
 
 class Change(object):
 
@@ -36,8 +19,12 @@ class Change(object):
         self.remote = None
         if remote:
             self.remote = remote
+        self.remote_status = None
+        self.code_review = None
+        self.verified = None
 
-    def load_infos(self, infos):
+    def load_data(self, infos):
+        # self.__dict__.update(infos)
         self.revision = infos['revision']
         self.branch = infos['branch']
         if 'id' in infos:
@@ -49,7 +36,7 @@ class Change(object):
         if 'number' in infos:
             self.number = infos['number']
         if 'status' in infos:
-            self.status = infos['status']
+            self.remote_status = infos['status']
         self.project_name = infos['project-name']
         if 'topic' in infos:
             self.topic = infos['topic']
@@ -61,6 +48,10 @@ class Change(object):
             self.url = infos['url']
         if 'commit-message' in infos:
             self.commit_message = infos['commit-message']
+        if 'comments' in infos:
+            self.comments = infos['comments']
+        self.code_review = infos['approvals']['code-review']
+        self.verified = infos['approvals']['verified']
 
     def submit(self):
         return self.remote.submit_change(self.number, self.patchset_number)
@@ -71,239 +62,337 @@ class Change(object):
     def reject(self):
         return self.remote.reject_change(self.number, self.patchset_number)
 
-    def upload(self):
-        result_change = self.remote.upload_change(self.branch, self.topic)
-        if result_change:
-            self.number = result_change.number
-            self.uuid = result_change.uuid
-            self.status = result_change.status
-            self.patchset_number = result_change.patchset_number
+    def upload(self, reviewers=None, successremove=True):
+        result_data = self.remote.upload_change(self.branch, self.topic, reviewers=reviewers, successremove=successremove)
+        if result_data:
+            self.load_data(result_data)
+            #self.number = result_data['number']
+            #self.uuid = result_data['uuid']
+            #self.status = result_data['status']
+            #self.patchset_number = result_data['patchset_number']
             log.info("Recombination with Change-Id %s uploaded in replica gerrit with number %s" % (self.uuid, self.number))
         else:
             return False
         return True
 
+    def is_approved(self):
+        if self.code_review >= 2 and self.verified >= 1:
+           return True
+        return False
+
     def abandon(self):
-        if self.status == "DRAFT":
-            self.publish(self.number, self.patchset_number)
-        self.remote.abandon(self.number, self.patchset_number)
+        if self.remote_status == "DRAFT":
+            self.remote.publish_change(self.number, self.patchset_number)
+        self.remote.abandon_change(self.number, self.patchset_number)
 
     def comment(self, comment_message, verified=None, code_review=None):
         self.remote.comment_change(self.number, self.patchset_number, comment_message, verified=verified, code_review=code_review)
 
+    def comment_data(self, data, verified=None, code_review=None):
+        comment_message = yaml.loads(data)
+        self.remote.comment_change(self.number, self.patchset_number, comment_message, verified=verified, code_review=code_review)
+
+    def load_from_remote(self, search_value, branch=None):
+        data = self.remote.get_change_data(search_value, branch=branch)
+        log.debugvar('data')
+        self.load_data(data)
+
+
 class Recombination(Change):
 
-    def __init__(self, underlayer, replication_strategy='change-by-change', recomb_type=None, remote=None, replica_remote=None, original_remote=None, patches_remote=None, infos=None):
+    def __init__(self, underlayer, remote):
         self.underlayer = underlayer
         self.removed_commits = None
         self.backportid = None
-        if original_remote:
-            self.original_remote = original_remote
-        if replica_remote:
-            self.replica_remote = replica_remote
-        if patches_remote:
-            self.patches_remote = patches_remote
-        if infos:
-            if 'metadata' not in infos or infos['metadata'] is None:
-                raise DecodeError
-            else:
-                self.metadata = infos['metadata']
-            super(Recombination, self).__init__(remote=remote, infos=infos)
-            self.load_metadata(original_remote=original_remote, replica_remote=replica_remote, patches_remote=patches_remote)
-        else:
-            super(Recombination, self).__init__(remote=remote)
-            self.recomb_type = recomb_type
-            self.commit_message = None
-            self.patches_queue = None
-            self.own_merge_commit = None
-            self.replica_revision = None
-            if self.recomb_type == 'replica-mutation':
-                try:
-                    self.replica_change = Change(remote=replica_remote)
-                    self.mutation_change = Change(remote=patches_remote)
-                except NameError:
-                    raise MissingInfoError
-            elif self.recomb_type == 'original-diversity':
-                try:
-                    self.original_change = Change(remote=original_remote)
-                    self.diversity_change = Change(remote=patches_remote)
-                except NameError:
-                    raise MissingInfoError
-            elif self.recomb_type == 'evolution-diversity':
-                try:
-                    self.evolution_change = Change(remote=original_remote)
-                    self.diversity_change = Change(remote=patches_remote)
-                except NameError:
-                    raise MissingInfoError
-            self.replication_strategy = replication_strategy
-            self.recombine_status = "UNATTEMPTED"
-        ch['comments'][-4]['message'].split('\n'):
+        self.user_requests = dict()
+        self.remote = remote
 
+    def initialize(self, remote):
+        self.commit_message = None
+        self.status = "UNATTEMPTED"
+#        ch['comments'][-4]['message'].split('\n'):
+        super(Recombination, self).__init__(remote=remote)
 
-    def load_metadata(self, original_remote=None, replica_remote=None, patches_remote=None):
-        log.debug(self.commit_message)
-        recomb_sources = self.metadata['sources']
-        header = self.metadata['Recombination']
+    def set_status(self, metadata=None):
+        self.status = "MISSING"
+        if metadata and 'recombine-status' in metadata:
+            self.status = metadata['recombine-status']
+        if self.remote_status == 'NEW' or self.remote_status == 'DRAFT' and self.status == "SUCCESSFUL":
+            self.status = 'PRESENT'
+        if self.remote_status != "MERGED" and self.is_approved():
+            self.status = "APPROVED"
+        if self.status == "DISCARDED" and self.remote_status == "ABANDONED":
+            # This combination of statuses means that this recombination attempt
+            # was canceled and will not be reattempted
+            log.warning("Recombination %s was discarded by user request, not reattempting" % self.uuid)
+        if self.status == "ABANDONED" and self.remote_status == "ABANDONED":
+            # this combination of statuses means that this recombination attempt
+            # is completely abanoned and will be reattempted
+            log.warning("Recombination %s was completely trashed, skipping and reattempting" % self.uuid)
+            raise RecombinationCanceledError
+        try:
+            if self.backport_change:
+                pass
+        except AttributeError:
+            pass
 
-        recomb_header = header.split('/')[0]
-        self.recomb_type = re.sub(':[a-zA-Z0-9]{6}', '',recomb_header)
-        self.replication_strategy = self.metadata['replication-strategy']
-        if self.recomb_type == 'replica-mutation':
-            self.replica_change = self.underlayer.get_changes_by_id([recomb_sources['main']['id']], branch=recomb_sources['main']['branch'])[recomb_sources['main']['id']]
-            self.mutation_change = self.patches_remote.get_changes_by_id([recomb_sources['patches']['id']])[recomb_sources['patches']['id']]
-        elif self.recomb_type == 'original-diversity':
-            self.original_change = self.original_remote.get_changes_by_id([recomb_sources['main']['id']], branch=recomb_sources['main']['branch'])[recomb_sources['main']['id']]
-            # Set real commit as revision
-            self.original_change.revision = recomb_sources['main']['revision']
-            self.diversity_change = self.underlayer.get_changes_by_id([recomb_sources['patches']['id']], branch=recomb_sources['patches']['branch'])[recomb_sources['patches']['id']]
-        elif self.recomb_type == 'evolution-diversity':
-            self.evolution_change = self.original_remote.get_changes_by_id([recomb_sources['main']['id']], branch=recomb_sources['main']['branch'])[recomb_sources['main']['id']]
-            # Set real commit as revision
-            self.evolution_change.revision = recomb_sources['main']['revision']
-            self.diversity_change = self.underlayer.get_changes_by_id([recomb_sources['patches']['id']], branch=recomb_sources['patches']['branch'])[recomb_sources['patches']['id']]
+    def get_commit_message_data(self):
 
-        if self.replication_strategy == 'change-by-change':
-            if 'target-replacement-branch' not in self.metadata:
-                self.metadata['target-replacement-branch'] = re.sub('recomb', 'target', self.branch)
-            self.target_replacement_branch = self.metadata['target-replacement-branch']
-        elif self.replication_strategy == 'lock-and-backports':
-            self.patches_commit_message = self.metadata['sources']['patches']['commit-message']
-
-        if 'recombine-status' in self.metadata:
-            self.recombine_status = self.metadata['recombine-status']
-            if self.metadata['recombine-status'] == "DISCARDED":
-                if self.status == "ABANDONED":
-                    pass
-
-        if 'backportid' in self.metadata:
-            self.backportid = self.metadata['backportid']
-
-
-        self.set_recomb_data()
-
-    def set_recomb_data(self):
-        if self.recomb_type == 'original-diversity':
-            main_source = self.original_change
-            patches_source = self.diversity_change
-            main_source_name = 'original'
-            patches_source_name = 'diversity'
-        elif self.recomb_type == 'replica-mutation':
-            main_source = self.replica_change
-            patches_source = self.mutation_change
-            main_source_name = 'replica'
-            patches_source_name = 'mutation'
-        if self.recomb_type == 'evolution-diversity':
-            main_source = self.evolution_change
-            patches_source = self.diversity_change
-            main_source_name = 'evolution'
-            patches_source_name = 'diversity'
-        else:
-            log.critical("Unknown Recombination type")
-            raise RecombinationTypeError
-
-        self.recomb_data = {
+        commit_message_data = {
             "sources": {
                 "main": {
-                    "name": str(main_source_name),
-                    "branch": str(main_source.branch),
-                    "revision": main_source.revision,
-                    "id": str(main_source.uuid)
+                    "name": str(self.main_source_name),
+                    "branch": str(self.main_source.branch),
+                    "revision": self.main_source.revision,
+                    "id": str(self.main_source.uuid)
                 },
                 "patches" : {
-                    "name": patches_source_name,
-                    "branch": patches_source.branch,
-                    "revision": patches_source.revision,
-                    "id": patches_source.uuid
+                    "name": str(self.patches_source_name),
+                    "branch": str(self.patches_source.branch),
+                    "revision": str(self.patches_source.revision),
+                    "id": str(self.patches_source.uuid)
                 },
             },
-            "recombine-status": self.recombine_status,
+            "recombine-status": self.status,
         }
-        if self.replication_strategy == "change-by-change":
-            self.recomb_data['target-replacement-branch'] = self.target_replacement_branch
-        self.recomb_data['replication-strategy'] = self.replication_strategy
-        if 'commit-message' in self.metadata['sources']['patches']:
-            self.recomb_data['sources']['patches']['commit-message'] = self.metadata['sources']['patches']['commit-message']
+        try:
+            commit_message_data['target-replacement-branch'] = self.target_replacement_branch
+        except AttributeError:
+            pass
+        try:
+            commit_message_data['sources']['patches']['commit-message'] = literal_unicode(self.backport_change.commit_message)
+        except AttributeError:
+            pass
+        # metadata['sources']['patches']['commit-message']
+        # if 'commit-message' in self.metadata['sources']['patches']:
+        return commit_message_data
 
-    def mangle_commit_message(self, commit_message):
-        upstream_string = "\nUpstream-%s: %s\n" % (self.evolution_change.branch, self.evolution_change.url)
-        commit_message = re.sub('(Change-Id: .*)', '%s\g<1>' % (upstream_string), commit_message)
-        commit_message = commit_message + "\n(cherry picked from commit %s)" % (self.evolution_change.revision)
-        return commit_message
-
-    def attempt(self):
-        # patches_revision = self.project.get_revision(self.patches.revision)
-        self.set_recomb_data()
-        if self.recomb_type == 'original-diversity':
-            try:
-                self.underlayer.merge_recombine(self.recomb_data, self.branch)
-                log.debug("Merge check with master-patches successful, ready to create review")
-            except AttemptError:
-                raise AttemptError
-        if self.recomb_type == 'evolution-diversity':
-            self.recomb_data['sources']['patches']['commit-message'] = literal_unicode(self.mangle_commit_message(self.evolution_change.commit_message))
-            try:
-                self.underlayer.cherrypick_recombine(self.recomb_data, self.branch)
-                log.debug("Merge check with master-patches successful, ready to create review")
-            except RecombinationFailed as e:
-                raise
-
-    def sync_replica(self, replica_branch):
-        if self.recomb_type == 'original-diversity':
-            log.info("Advancing replica branch %s to %s " % (replica_branch, self.original_change.revision))
-            self.underlayer.sync_replica(replica_branch, self.original_change.revision)
-        else:
-            raise RecombinationTypeError
-
-    def amend(self):
-        self.underlayer.amend(message=recomb_data)
-        self.upload_change(self.number, self.patchset_number)
-
-    def analyze_comments(self, info):
-        comment_data = dict()
+    def analyze_comments(self):
+        # comments may update metadata too
+        # comments with actions will be acknoledged with
+        # action:
+        #   comment-id: comment id
+        #   outcome: completed
+        comments_metadata = dict()
+        comment_commands = ["DISCARD"]
+        # Maybe it's better to start yaml comments with ---
         if self.comments:
             for comment in self.comments:
+                log.debugvar('comment')
                 try:
-                    data = yaml.load(self.comment())
-                    comment_data['values'] = data
-                except ScannerError, ParserError, ValueError:
-                    for line in comment.split('\n')
+                    comment_metadata = yaml.load(comment['message'])
+                    if 'user-request' in comment_metadata and str(comment_metadata['user-request']['comment-id']) in self.user_requests:
+                        self.user_requests[str(comment_metadata['user-request']['comment-id'])]['outcome'] = comment_metadata['user-request']['outcome']
+                        comment_metadata.pop('user-request')
+                    comments_metadata.update(comment_metadata)
+                except (ValueError, yaml.scanner.ScannerError,yaml.parser.ParserError):
+                    for line in comment['message'].split('\n'):
                         for cc in comment_commands:
                             rs = re.search('^%s$' % cc, line)
                             if rs is not None:
-                                comment_data['action'] == cc
-        return comment_data
+                                self.user_requests[str(comment['timestamp'])] = dict()
+                                self.user_requests[str(comment['timestamp'])]['type'] = cc
+                                self.user_requests[str(comment['timestamp'])]['outcome'] = "open"
 
-    def safe_abandon(self, reason):
-        if not reason:
-            log.error("you cannot abandon without recombine status")
-        self.recomb_data['recombine_status'] = reason
-        self.amend(recomb_data)
-        super(Recombination, self).abandon()
+        return comments_metadata
+
+    def serve_requests(self):
+        ur = self.user_requests
+        log.debugvar('ur')
+        if self.user_requests:
+            log.info("Serving user requests in recombination %s comments" % self.uuid)
+            for comment_id in self.user_requests:
+                if self.user_requests[comment_id]['outcome'] != "completed":
+                    if self.user_requests[comment_id]['type'] == "DISCARD":
+                        served = { 'user-request': { 'comment-id' : comment_id, 'type': self.user_requests[comment_id]['type'], 'outcome': 'completed'}, 'recombine-status': 'DISCARDED'}
+                        comment = yaml.safe_dump(served)
+                        self.comment(comment, code_review="-2")
+                        raise ValueError
+                        self.abandon()
 
     def handle_status(self):
+        self.serve_requests()
         if self.status == "MISSING":
-            if self.recomb_type == 'original-diversity':
-                try:
-                    self.attempt()
-                except AttemptError:
-                    log.error("Recombination attempt unsuccessful")
-                    raise UploadError
-                try:
-                    self.upload()
-                except UploadError:
-                    log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
-                    raise UploadError
+            self.missing()
+        elif self.status == "APPROVED":
+            self.approved()
+        elif self.status == "MERGED":
+            self.merged()
+        elif self.status == "PRESENT":
+            self.present()
+        elif self.status == "BLOCKED":
+            self.blocked()
 
-            if self.recomb_type == 'evolution-diversity':
-                try:
-                    self.attempt()
-                except RecombinationFailed as e:
-                    self.upload()
-                    status = e.args[0]
-                    suggested_solution = e.args[1]
-                    if not suggested_solution:
-                        suggested_solution=" No clue why this may have happened."
-                    message = '''Cherry pick failed with status:
+    def load_change_data(self, change_data):
+        """ Common load operations for all recombination types """
+        self.load_data(change_data)
+        log.debug(self.commit_message)
+        try:
+            metadata = yaml.load(self.commit_message)
+        except (ValueError, yaml.scanner.ScannerError,yaml.parser.ParserError):
+            log.error("commit message not in yaml")
+            raise DecodeError
+        if 'recombine-status' in metadata:
+            self.status = metadata['recombine-status']
+        metadata.update(self.analyze_comments())
+        self.set_status(metadata=metadata)
+        return metadata
+        #recomb_sources = metadata['sources']
+        #header = metadata['Recombination']
+        #recomb_header = header.split('~')[0]
+        # self.recomb_type = re.sub(':[a-zA-Z0-9]{6}', '',recomb_header)
+
+class OriginalDiversityRecombination(Recombination):
+
+    def initialize(self, data, original_change=None, diversity_change=None, replica_change=None, mutation_change=None):
+        super(OriginalDiversityRecombination, self).initialize(remote=remote)
+        try:
+            self.original_change = original_change
+            self.diversity_change = diversity_change
+            self.target_branch = "%s" % self.underlayer.branch_map['target']['original'][self.original_change.branch]
+            branch_id = "%s-%s" % (self.original_change.branch, self.original_change.revision)
+            self.branch = "recomb-original-%s" % branch_id
+            self.target_replacement_branch = "target-original-%s" % branch_id
+            self.topic = self.original_change.uuid
+        except NameError:
+            raise MissingInfoError
+        self.set_status()
+
+    def load_metadata(self, original_remote=None, replica_remote=None, patches_remote=None):
+        super(OriginalDiversityRecombination, self)._load_metadata(metadata)
+        self.original_change = Change(remote=self.original_change)
+        self.original_change.load_from_remote(recomb_sources['main']['id'], branch=recomb_sources['main']['branch'])
+        # Set real commit as revision
+        self.original_change.revision = recomb_sources['main']['revision']
+        self.diversity_change = Change(remote=self.underlayer)
+        self.diversity_change.load_from_remote(recomb_sources['patches']['id'], branch=recomb_sources['patches']['branch'])
+        if 'target-replacement-branch' not in self.metadata:
+            self.metadata['target-replacement-branch'] = re.sub('recomb', 'target', self.branch)
+        self.target_replacement_branch = self.metadata['target-replacement-branch']
+        self.main_source = self.original_change
+        self.patches_source = self.diversity_change
+        self.main_source_name = 'original'
+        self.patches_source_name = 'diversity'
+        self.analyze_comments()
+        self.set_status()
+
+    def attempt(self):
+        try:
+            self.underlayer.merge_recombine(self)
+            log.debug("Merge check with master-patches successful, ready to create review")
+        except AttemptError:
+            raise AttemptError
+
+    def sync_replica(self, replica_branch):
+        log.info("Advancing replica branch %s to %s " % (replica_branch, self.original_change.revision))
+        self.underlayer.sync_replica(replica_branch, self.original_change.revision)
+
+    def missing(self):
+        try:
+            self.attempt()
+        except AttemptError:
+            log.error("Recombination attempt unsuccessful")
+            raise UploadError
+        try:
+            self.upload()
+        except UploadError:
+            log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
+            raise UploadError
+
+    def approved():
+        try:
+            self.sync_replica(replica_branch)
+        except RecombinationSyncReplicaError:
+            log.error("Replica could not be synced")
+        self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
+        try:
+            self.submit()
+        except RecombinationSubmitError:
+
+            log.error("Recombination not submitted")
+
+    def merged():
+        log.warning("branch is out of sync with original")
+        self.sync_replica(replica_branch)
+        self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
+
+    def present():
+        pass
+
+
+class EvolutionDiversityRecombination(Recombination):
+
+    def initialize(self, remote, evolution_change=None, diversity_change=None, backport_change=None):
+        super(EvolutionDiversityRecombination, self).initialize(remote)
+        try:
+            self.evolution_change = evolution_change
+            self.diversity_change = diversity_change
+            self.backport_change = backport_change
+            self.branch = "recomb-evolution-%s-%s" % (self.evolution_change.branch, self.evolution_change.revision)
+            self.topic = self.evolution_change.uuid
+        except NameError:
+            raise MissingInfoError
+        self.main_source = self.evolution_change
+        self.patches_source = self.diversity_change
+        self.main_source_name = 'evolution'
+        self.patches_source_name = 'diversity'
+        self.set_status()
+        if self.backport_change.remote_status is not None:
+            log.warning("recombination already backported in patches branch")
+            self.status = ""
+        else:
+            self.backport_change.commit_message = self.mangle_commit_message(self.evolution_change.commit_message)
+        self.follow_backport_status()
+
+    def load_change_data(self, change_data, original_remote=None, replica_remote=None, patches_remote=None, diversity_change=None):
+        self.main_source_name = 'evolution'
+        self.patches_source_name = 'diversity'
+        metadata = super(EvolutionDiversityRecombination, self).load_change_data(change_data)
+        self.evolution_change = Change(remote=original_remote)
+        self.evolution_change.load_from_remote(metadata['sources']['main']['id'], branch=metadata['sources']['main']['branch'])
+        self.main_source = self.evolution_change
+        # Set real commit as revision
+        self.evolution_change.revision = metadata['sources']['main']['revision']
+        self.diversity_change = diversity_change
+        self.patches_source = self.diversity_change
+        self.backport_change = Change(remote=patches_remote)
+        if 'backport-id' in metadata and metadata['backport-id'] is not None:
+            self.backport_change.load_from_remote(metadata['backport-id'], branch=metadata['sources']['patches']['branch'])
+        else:
+            self.backport_change.commit_message = metadata['sources']['patches']['commit-message']
+            self.backport_change.branch = metadata['sources']['patches']['branch']
+        if 'backport-test-results' in metadata:
+            self.backport_change.post_create_comment = dict()
+            self.backport_change.post_create_comment['message'] = metadata['backport-test-results']['message']
+            self.backport_change.post_create_comment['Code-Review'] = metadata['backport-test-results']['Code-Review']
+            self.backport_change.post_create_comment['Verified'] = metadata['backport-test-results']['Verified']
+            self.backport_change.reviewers = metadata['backport-test-results']['reviewers']
+        self.follow_backport_status()
+
+    def attempt(self):
+        self.underlayer.cherrypick_recombine(self)
+
+    def mangle_commit_message(self, commit_message):
+        try:
+            upstream_branch_name = self.evolution_change.branch.split('/')[1]
+        except IndexError:
+            upstream_branch_name = self.evolution_change.branch
+        upstream_string = "\nUpstream-%s: %s\n" % (upstream_branch_name, self.evolution_change.url)
+        commit_message = re.sub('(Change-Id: %s)' % self.evolution_change.uuid, '%s\g<1>' % (upstream_string), commit_message)
+        commit_message = commit_message + "\n(cherry picked from commit %s)" % (self.evolution_change.revision)
+        return commit_message
+
+    def missing(self):
+        try:
+            self.attempt()
+            log.debug("Recombination with patches successful, ready to create review")
+        except RecombinationFailed as e:
+            self.upload()
+            status = e.args[0]
+            suggested_solution = e.args[1]
+            if not suggested_solution:
+                suggested_solution=" No clue why this may have happened."
+            message = '''Cherry pick failed with status:
     %s
 
 %s
@@ -316,83 +405,112 @@ solve the conflicts, then
 
     git commit -a --amend
 
-edit sources.main.body *ONLY*, then
+changing recombine-status to SUCCESSFUL.
+Limit any eventual other modifications to sources.main.body *ONLY*, then update review as usual with
 
 git review -D
 
-If you decide to discard this pick instead, please comment to this change with a single line: DISCARD''' % (status, suggested_solution, self.number, self.recomb_data['sources']['main']['revision'] )
-                    self.comment(message, verified="-1")
-                else:
-                    self.upload()
+If you decide to discard this pick instead, please comment to this change with a single line: DISCARD''' % (status, suggested_solution, self.number, self.evolution_change.revision )
+            self.comment(message, verified="-1")
+        else:
+            self.upload()
 
-        if self.status == "APPROVED":
-            if self.recomb_type == 'original-diversity':
-                try:
-                    self.sync_replica(replica_branch)
-                except RecombinationSyncReplicaError:
-                    log.error("Replica could not be synced")
-                self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
-                try:
-                    self.submit()
-                except RecombinationSubmitError:
-                    log.error("Recombination not submitted")
-            elif self.recomb_type == 'evolution-diversity':
-                if self.backportid:
-                    backport = self.patches.get_changes_by_id(backportid)
-                    if backport.status == "MERGED":
-                        try:
-                            self.submit()
-                        except RecombinationSubmitError:
-                            log.error("Recombination not submitted")
-                    if backport.status == "ABANDONED":
-                        try:
-                            self.abandon()
-                        except RecombinationAbandonedError:
-                            log.error("Recombination not abandoned")
-                else:
-                    # A possible approach is to search original author/timestamp
-                    # backportid = self.patches.search_backport()
-                    backportid = None
-                    if not backportid:
-                        try:
-                            self.underlayer.format_patch(self)
-                            backport = self.patches_remote.upload_change(self.recomb_data['sources']['patches']['branch'],'automated_proposal', reviewers=["whayutin@redhat.com"], successremove=False)
-                        except UploadError:
-                            log.error("Mannaggai")
-                        self.recomb_data['patches-review']  = backport.uuid
-                        self.amend()
-            elif self.recomb_type == 'replica-mutation':
-                if self.mutation_change.status != "MERGED":
-                    try:
-                        self.mutation_change.approve()
-                        self.mutation_change.submit()
-                    except RecombinationApproveError:
-                        log.error("Originating change approval failed")
-                    except RecombinationSubmitError:
-                        log.error("Originating change submission failed")
-                self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
-                if self.status != "MERGED":
-                    self.submit()
-                else:
-                    log.warning("Recombination already submitted")
-                # update existing recombination from upstream changes
-                # for change in midstream_gerrit.gather_current_merges(patches_revision):
-                #    local_repo.merge_fortests(change['upstream_revision'], patches_revision)
-                #    upload new patchset with updated master-patches and updated message on midstream changes with old master_patches
-        if self.status == "MERGED":
-            if self.replication_strategy == "change-by-change":
-                log.warning("branch is out of sync with original")
-                self.sync_replica(replica_branch)
-                self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
-            elif self.replication_strategy == "lock-and-backports":
-                pass
-        elif self.status == "PRESENT":
-            if self.replication_strategy == "lock-and-backports":
-                if self.recombine_status == "BLOCKED":
-                    comment_data = handle_comments()
-                    if comment_data['action'] == "DISCARD":
-                        self.safe_abandon(reason="DISCARDED by user")
-                    self.check_metadata()
-                elif self.recombine_status == "":
-                    pass
+    def follow_backport_status(self):
+        if self.backport_change.remote_status == "MERGED":
+            try:
+                self.submit()
+            except RecombinationSubmitError:
+                log.error("Recombination not submitted")
+        elif self.backport_change.remote_status == "ABANDONED":
+            try:
+                self.abandon()
+            except RecombinationAbandonedError:
+                log.error("Recombination not abandoned")
 
+    def approved(self):
+        try:
+            self.underlayer.format_patch(self)
+            self.backport_change.topic ='automated_proposal'
+            self.backport_change.upload(reviewers=self.backport_change.reviewers, successremove=False)
+        except UploadError:
+            log.error("Mannaggai")
+        message = self.backport_change.post_create_comment['message']
+        self.backport_change.comment(message, code_review=self.backport_change.post_create_comment['Code-Review'], verified=self.backport_change.post_create_comment['Verified'])
+        self.comment("backport-id: %s" % self.backport_change.uuid)
+
+    def present(self):
+        pass
+
+    def blocked(self):
+        pass
+
+
+class ReplicaMutationRecombination(Recombination):
+
+    def initialize(self, data, original_change=None, diversity_change=None, replica_change=None, mutation_change=None):
+        super(ReplicaMutationRecombination, self).initialize(remote=remote)
+        try:
+            self.mutation_change = mutation_change
+            self.replica_change = replica_change
+            branch_id = "%s-%s" % (self.replica_change.branch, self.replica_change.revision)
+            self.branch = "recomb-patches-%s" % branch_id
+            self.target_replacement_branch = "target-patches-%s" % branch_id
+        except NameError:
+            raise MissingInfoError
+        self.set_status()
+
+    def load_metadata(self, original_remote=None, replica_remote=None, patches_remote=None):
+        self.replica_change = Change(remote=self.underlayer)
+        self.replica_change.load_from_remote(recomb_sources['main']['id'], branch=recomb_sources['main']['branch'])
+        self.mutation_change = Change(remote=patches_remote)
+        self.mutation_change.load_from_remote(recomb_sources['patches']['id'])
+        if 'target-replacement-branch' not in self.metadata:
+            self.metadata['target-replacement-branch'] = re.sub('recomb', 'target', self.branch)
+        self.target_replacement_branch = self.metadata['target-replacement-branch']
+        main_source = self.replica_change
+        patches_source = self.mutation_change
+        main_source_name = 'replica'
+        patches_source_name = 'mutation'
+
+
+    def attempt(self):
+        try:
+            self.underlayer.merge_recombine(self)
+            log.debug("Merge check with master-patches successful, ready to create review")
+        except AttemptError:
+            raise AttemptError
+        # patches_revision = self.project.get_revision(self.patches.revision)
+
+    def sync_replica(self, replica_branch):
+        log.info("Advancing replica branch %s to %s " % (replica_branch, self.original_change.revision))
+        self.underlayer.sync_replica(replica_branch, self.original_change.revision)
+
+    def missing(self):
+        pass
+
+    def approved(self):
+        if self.mutation_change.status != "MERGED":
+            try:
+                self.mutation_change.approve()
+                self.mutation_change.submit()
+            except RecombinationApproveError:
+                log.error("Originating change approval failed")
+            except RecombinationSubmitError:
+                log.error("Originating change submission failed")
+        self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
+        if self.status != "MERGED":
+            self.submit()
+        else:
+            log.warning("Recombination already submitted")
+        # update existing recombination from upstream changes
+        # for change in midstream_gerrit.gather_current_merges(patches_revision):
+        #    local_repo.merge_fortests(change['upstream_revision'], patches_revision)
+        #    upload new patchset with updated master-patches and updated message on midstream changes with old master_patches
+
+    def merged(self):
+        log.warning("branch is out of sync with original")
+        self.sync_replica(replica_branch)
+        self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
+
+    def present(self):
+        pass

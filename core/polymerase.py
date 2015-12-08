@@ -1,6 +1,8 @@
 import copy
+import traceback
 from colorlog import log, logsummary
 from project import Project
+import sys
 
 
 class Polymerase(object):
@@ -63,6 +65,7 @@ class Polymerase(object):
                 self.projects[project_name] = Project(project_name, projects[project_name], self.base_dir + "/"+ project_name, fetch=fetch)
                 logsummary.info("Project: %s initialized" % project_name)
             except Exception, e:
+                traceback.print_exc(file=sys.stdout)
                 log.error(e)
                 logsummary.error("Project %s skipped, reason: %s" % (project_name, e))
 

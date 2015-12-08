@@ -1,12 +1,9 @@
 # Performs sanity check for midstream
 import json
 import pprint
-import re
-import yaml
 from ..colorlog import log
-from collections import OrderedDict
 from shellcommand import shell
-from ..datastructures import Change, Recombination
+from ..datastructures import Change
 
 
 class Gerrit(object):
@@ -17,9 +14,9 @@ class Gerrit(object):
         self.project_name = project_name
         self.url = "ssh://%s/%s" % (host, project_name)
 
-    def query_changes_json(self, query):
+    def query_changes_json(self, query, comments=False):
         changes_infos = list()
-        cmd = shell('ssh %s gerrit query --current-patch-set --format json %s' % (self.host,query))
+        cmd = shell('ssh %s gerrit query --comments --current-patch-set --format json %s' % (self.host,query))
         log.debug(pprint.pformat(cmd.output))
         for change_json in cmd.output:
             if change_json !='':
@@ -44,10 +41,10 @@ class Gerrit(object):
             return True
         return False
 
-    def publish_change(self., number, patchset):
+    def publish_change(self, number, patchset):
         shell('ssh %s gerrit review --publish --project %s %s,%s' % (self.host, self.project_name, number, patchset))
 
-    def abandon_change(self., number, patchset):
+    def abandon_change(self, number, patchset):
         shell('ssh %s gerrit review --abandon --project %s %s,%s' % (self.host, self.project_name, number, patchset))
 
     def upload_change(self, branch, topic, reviewers=None, successremove=True):
@@ -58,6 +55,7 @@ class Gerrit(object):
                 command = command + "r=%s," % reviewer
             command.rstrip(',')
 
+        # FIXME: check upload results in another way
         shell('git checkout %s' % branch)
         #cmd = shell('git review -D -r %s -t "%s" %s' % (self.name, topic, branch))
         #for line in cmd.output:
@@ -74,15 +72,14 @@ class Gerrit(object):
             return None
         gerrit_infos = json.loads(cmd.output[:-1][0])
         infos = self.normalize_infos(gerrit_infos)
-        change = Change(infos=infos)
-        return change
+        return infos
 
     def comment_change(self, number, patchset, comment_message, verified=None, code_review=None):
         review_input = dict()
         review_input['labels'] = dict()
         review_input['message'] = comment_message
         if code_review:
-            review_input['labels']['Code-Review'] = verified
+            review_input['labels']['Code-Review'] = code_review
         if verified:
             review_input['labels']['Verified'] = verified
 
@@ -94,31 +91,22 @@ class Gerrit(object):
         query_string = '\(%s:%s' % (criteria, ids[0])
         for change in ids[1:]:
             query_string = query_string + " OR %s:%s" % (criteria,change)
-        query_string = query_string + "\) AND project:%s AND NOT status:abandoned" % (self.project_name)
+#        uncomment this below and remove the if else block
+#        query_string = query_string + "\) AND project:%s AND NOT status:abandoned" % (self.project_name)
+        if self.name == 'original':
+            query_string = query_string + "\) AND project:openstack/nova AND NOT status:abandoned"
+        elif criteria == "commit":
+            query_string = query_string + "\) AND project:nova AND NOT status:abandoned"
+        elif criteria == "topic":
+            query_string = query_string + "\) AND project:nova-gitnetics AND NOT status:abandoned"
+        elif criteria == "change":
+            query_string = query_string + "\) AND project:nova AND NOT status:abandoned"
+
+
         if branch:
             query_string = query_string + " AND branch:%s " % branch
-        log.debug("search in upstream gerrit: %s" % query_string)
+        log.debug("search in %s gerrit: %s" % (self.name, query_string))
         return query_string
-
-    @staticmethod
-    def approved(infos):
-        if not infos['approvals']:
-            code_review = 0
-            verified = 0
-        else:
-            code_review = -2
-            verified = -1
-            for approval in range(0, len(infos['approvals'])):
-                patchset_approval = infos['approvals'][approval]
-                if patchset_approval['type'] == 'Code-Review':
-                    code_review = max(code_review, int(patchset_approval['value']))
-                if patchset_approval['type'] == 'Verified':
-                    verified = max(verified, int(patchset_approval['value']))
-        log.debug("change %s max approvals: CR: %d, V: %d" % (infos['id'], code_review, verified))
-        if code_review >= 2 and verified >= 1:
-           log.debug("change %s approved for submission if all precedent are approved too")
-           return True
-        return False
 
     def normalize_infos(self, gerrit_infos):
         infos = {}
@@ -134,81 +122,89 @@ class Gerrit(object):
             infos['topic'] = gerrit_infos['topic']
         infos['number'] = gerrit_infos['number']
         infos['status'] = gerrit_infos['status']
-        infos['approvals'] = None
         infos['url'] = gerrit_infos['url']
         infos['comments'] = None
-        if 'comments' in gerrit_infos['comments']:
+        if 'comments' in gerrit_infos:
             infos['comments'] = gerrit_infos['comments']
         infos['commit-message'] = gerrit_infos['commitMessage']
+
+        infos['approvals'] = dict()
         if 'approvals' in gerrit_infos['currentPatchSet']:
-            infos['approvals'] = gerrit_infos['currentPatchSet']['approvals']
-        if gerrit_infos['status'] == 'NEW' or gerrit_infos['status'] == 'DRAFT':
-            infos['status'] = 'PRESENT'
-        if gerrit_infos['status'] != "MERGED" and self.approved(infos):
-            infos['status'] = "APPROVED"
-        if gerrit_infos['status'] == "ABANDONED":
-            infos['status'] = "ABANDONED"
-        try:
-            infos['metadata'] = yaml.load(infos['commit-message'])
-        except (ValueError, yaml.scanner.ScannerError,yaml.parser.ParserError):
-            log.error("commit message not in yaml")
+            code_review = -2
+            verified = -1
+            for patchset_approval in gerrit_infos['currentPatchSet']['approvals']:
+                if patchset_approval['type'] == 'Code-Review':
+                    code_review = max(code_review, int(patchset_approval['value']))
+                if patchset_approval['type'] == 'Verified':
+                    verified = max(verified, int(patchset_approval['value']))
+        else:
+            code_review = 0
+            verified = 0
+        infos['approvals']['code-review'] = code_review
+        infos['approvals']['verified'] = verified
 
         return infos
 
-    def get_changes_info(self, search_values, search_field='change', key_field='id', branch=None):
-        infos = dict()
+    def get_changes_data(self, search_values, search_field='change', results_key='id', branch=None):
+        if type(search_values) is str or type(search_values) is unicode:
+            search_values = [search_values]
+
         query_string = self.get_query_string(search_field, search_values, branch=branch)
-        changes_infos = self.query_changes_json(query_string)
+        changes_data = self.query_changes_json(query_string)
 
-        for gerrit_infos in changes_infos:
-            norm_infos = self.normalize_infos(gerrit_infos)
-            infos[norm_infos[key_field]] = norm_infos
+        data = dict()
+        for gerrit_data in changes_data:
+            norm_data = self.normalize_infos(gerrit_data)
+            data[norm_data[results_key]] = norm_data
 
-        return infos
+        return data
 
-    def get_changes_by_id(self, search_values, search_field='change', key_field='id', branch=None):
+    def get_change_data(self, search_value, search_field='change', results_key='id', branch=None):
+        change_data = self.get_changes_data(search_value, search_field=search_field, results_key=results_key, branch=branch)
+
+        if len(change_data) == 1:
+            change_data = change_data.popitem()[1]
+        else:
+            raise MultipleValuesError
+
+        return change_data
+
+    def get_changes(self, search_values, search_field='change', results_key='id', branch=None):
+        change_data = self.get_changes_data(search_values, search_field=search_field, results_key=results_key, branch=branch)
+
         changes = dict()
-        query_string = self.get_query_string(search_field, search_values, branch=branch)
-        changes_infos = self.query_changes_json(query_string)
-
-        for gerrit_infos in changes_infos:
-            infos = self.normalize_infos(gerrit_infos)
-            change = Change(infos=infos, remote=self)
-            changes[infos[key_field]] = change
+        for key in change_data:
+            change = Change(remote=self)
+            change.load_data(change_data[key])
+            changes[key] = change
 
         return changes
 
-    def get_original_ids(self, commits):
-        ids = OrderedDict()
-        for commit in commits:
-            main_revision = commit['hash']
-            # in gerrit, merge commits do not have Change-id
-            # if commit is a merge commit, search the second parent for a Change-id
-            if len(commit['parents']) != 1:
-                commit = commit['subcommits'][0]
-            found = False
-            for line in commit['body']:
-                if re.search('Change-Id: ', line):
-                    ids[re.sub(r'\s*Change-Id: ', '', line)] = main_revision
-                    found = True
-            if not found:
-                log.warning("no Change-id found in commit %s or its ancestors" % main_revision)
+    def get_change(self, search_values, search_field='change', results_key='id', branch=None):
+        change_data = self.get_changes(search_values, search_field=search_field, results_key=results_key, branch=branch)
 
-        return ids
+        if len(change_data) == 1:
+            change = change_data.popitem()[1]
+        else:
+            raise MultipleValuesError
+
+        return change
 
     def get_untested_recombs_infos(self, recomb_id=None, branch=''):
         if recomb_id:
             change_query = 'AND change:%s' % recomb_id
         else:
             change_query = ''
-        query = "'owner:self AND project:%s %s AND branch:^recomb-.*-%s.* AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND NOT status:abandoned)'"  % (self.project_name, change_query, branch)
+#        query = "'owner:self AND project:%s %s AND branch:^recomb-.*-%s.* AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND NOT status:abandoned)'"  % (self.project_name, change_query, branch)
+        query = "'owner:self AND project:nova %s AND branch:^recomb-.*-%s.* AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND NOT status:abandoned)'"  % (change_query, branch)
         untested_recombs = self.query_changes_json(query)
         log.debugvar('untested_recombs')
         return untested_recombs
 
     def get_approved_change_infos(self, branch):
         infos = dict()
-        query_string = "'owner:self AND project:%s AND branch:^%s AND label:Code-Review+2 AND label:Verified+1 AND NOT status:abandoned'" % (self.project_name, branch)
+#        query_string = "'owner:self AND project:%s AND branch:^%s AND label:Code-Review+2 AND label:Verified+1 AND NOT status:abandoned'" % (self.project_name, branch)
+#        query_string = "'owner:self AND project:nova AND branch:^%s AND label:Code-Review+2 AND label:Verified+1 AND NOT status:abandoned'" (branch)
         changes_infos = self.query_changes_json(query_string)
 
         for gerrit_infos in changes_infos:
