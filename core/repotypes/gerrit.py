@@ -196,7 +196,7 @@ class Gerrit(object):
         else:
             change_query = ''
 #        query = "'owner:self AND project:%s %s AND branch:^recomb-.*-%s.* AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND NOT status:abandoned)'"  % (self.project_name, change_query, branch)
-        query = "'owner:self AND project:nova %s AND branch:^recomb-.*-%s.* AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND NOT status:abandoned)'"  % (change_query, branch)
+        query = "'owner:self AND project:nova-gitnetics %s AND branch:^recomb-.*-%s.* AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND NOT status:abandoned)'"  % (change_query, branch)
         untested_recombs = self.query_changes_json(query)
         log.debugvar('untested_recombs')
         return untested_recombs
