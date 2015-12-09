@@ -1,6 +1,8 @@
 import pprint
 import re
 import copy
+import os
+import yaml
 from colorlog import log, logsummary
 from collections import OrderedDict
 from repotypes.git import Underlayer
@@ -282,17 +284,22 @@ class Project(object):
             recombs = [recomb for recomb in test_results]
 
         for recomb_id in recombs:
-            recombination = self.underlayer.get_recombination(recomb_id, key_field='number')
+            recombination = self.underlayer.get_recombination(recomb_id)
             test_score, test_analysis = self.get_test_score(test_results[recomb_id])
-            comment_data = dict()
-            comment_data['test-link'] = "test-link"
-            comment_data['votes'] = dict()
-            comment_data['votes']['Code-review'] = 0
-            comment_data['votes']['Verify'] = 0
-            comment_data['reviewers'] = reviewers_list
             if test_score > self.test_minimum_score:
-                recomb.comment(comment)
-                recomb.approve()
+                comment_data = dict()
+                comment_data['backport-test-results'] = dict()
+                build_url = os.environ.get('BUILD_URL')
+                if build_url:
+                    comment_data['backport-test-results']['message'] = "test-link: %s" % build_url
+                else:
+                    comment_data['backport-test-results']['message'] = ""
+                comment_data['backport-test-results']['Code-Review'] = 0
+                comment_data['backport-test-results']['Verified'] = "1"
+                comment_data['backport-test-results']['reviewers'] = self.replica_project['success_reviewers_list']
+                comment = yaml.dump(comment_data)
+                recombination.comment(comment)
+                recombination.approve()
                 logsummary.info("Recombination %s Approved" % recomb_id)
             else:
                 recomb.reject()
