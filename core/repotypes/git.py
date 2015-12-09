@@ -617,8 +617,8 @@ class Underlayer(Git):
             recombinations.append(recombination)
         return recombinations
 
-    def get_recombination():
-        return self.recomb_remote.get_change(recomb_id, results_key='number')
+    def get_recombination(self, recomb_id):
+        return self.recomb_remote.get_change(recomb_id)
 
 
 class RemoteGit(Git):

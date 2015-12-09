@@ -282,7 +282,7 @@ class Project(object):
             recombs = [recomb for recomb in test_results]
 
         for recomb_id in recombs:
-            recombination = self.underlayer.get_recombination(recomb_id, key_field='number')
+            recombination = self.underlayer.get_recombination(recomb_id)
             test_score, test_analysis = self.get_test_score(test_results[recomb_id])
             comment_data = dict()
             comment_data['test-link'] = "test-link"
