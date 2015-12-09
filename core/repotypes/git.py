@@ -477,7 +477,7 @@ class Underlayer(Git):
         shell('git checkout parking')
         shell('git push replica :%s ' % target_replacement_branch)
 
-    def fetch_recomb(self, test_basedir, status, recomb_id=None):
+    def fetch_recombinations(self, test_basedir, status, recomb_id=None):
         untested_recombs = self.recomb_remote.get_untested_recombs_infos(recomb_id=recomb_id)
         dirlist = dict()
         os.chdir(self.directory)
