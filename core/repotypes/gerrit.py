@@ -100,7 +100,7 @@ class Gerrit(object):
         elif criteria == "topic":
             query_string = query_string + "\) AND project:nova-gitnetics AND NOT status:abandoned"
         elif criteria == "change":
-            query_string = query_string + "\) AND (project:nova OR project:nova-gitnetics) AND NOT status:abandoned"
+            query_string = query_string + "\) AND \(project:nova OR project:nova-gitnetics\) AND NOT status:abandoned"
 
 
         if branch:
