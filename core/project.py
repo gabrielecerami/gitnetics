@@ -289,7 +289,7 @@ class Project(object):
             if test_score > self.test_minimum_score:
                 comment_data = dict()
                 comment_data['backport-test-results'] = dict()
-                build_url = os.environ.get('BUILD_URL', None)
+                build_url = os.environ.get('BUILD_URL')
                 if build_url:
                     comment_data['backport-test-results']['message'] = "test-link: %s" % build_url
                 else:
