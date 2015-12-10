@@ -294,7 +294,7 @@ class Project(object):
                     comment_data['backport-test-results']['message'] = "test-link: %s" % build_url
                 else:
                     comment_data['backport-test-results']['message'] = ""
-                comment_data['backport-test-results']['Code-review'] = 0
+                comment_data['backport-test-results']['Code-Review'] = 0
                 comment_data['backport-test-results']['Verified'] = "1"
                 comment_data['backport-test-results']['reviewers'] = self.replica_project['success_reviewers_list']
                 comment = yaml.dump(comment_data)
