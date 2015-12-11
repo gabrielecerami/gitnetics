@@ -34,6 +34,8 @@ class Project(object):
         self.replication_strategy = project_info['replication-strategy']
         self.test_minimum_score = 0
 
+        self.patches_branch_suffix = "-patches"
+        self.target_branch_suffix = "-tag"
         # Set up local repo
         self.underlayer = Underlayer(project_name, local_dir)
 
@@ -46,7 +48,7 @@ class Project(object):
 
         # Set up branches hypermap
         # get branches from original
-        #self.original_branches = self.underlayer.list_branches('original')
+        # self.original_branches = self.underlayer.list_branches('original')
         self.original_branches = project_info['original']['watch-branches']
         self.backports_startref = dict()
         for original_branch in self.original_branches:
@@ -57,8 +59,8 @@ class Project(object):
                 replica_branch = project_info['replica']['branch-mappings'][original_branch]
             except KeyError:
                 replica_branch = original_branch
-            target_branch = '%s-tag' % replica_branch
-            patches_branch = '%s-patches' % replica_branch
+            target_branch = '%s%s' % (replica_branch, self.target_branch_suffix)
+            patches_branch = '%s%s' % (replica_branch, self.patches_branch_suffix)
             self.underlayer.set_branch_maps(original_branch, replica_branch, target_branch, patches_branch)
 
             self.recombinations[replica_branch] = None
@@ -126,8 +128,8 @@ class Project(object):
         replica_branch = self.underlayer.branch_maps['original->replica'][original_branch]
         target_branch = self.underlayer.branch_maps['original->target'][original_branch]
         log.debug("Scanning distance from original branch %s" % original_branch)
-        if self.replication_strategy == "change-by-change" and revision_exists(self.ref_locks[replica_branch], replica_branch):
-                log.info("Cannot replicate branch past the specified lock")
+#        if self.replication_strategy == "change-by-change" and revision_exists(self.ref_locks[replica_branch], replica_branch):
+#                log.info("Cannot replicate branch past the specified lock")
 
         self.recombinations[original_branch] = self.get_recombinations_by_interval(original_branch)
         slices = self.get_slices(self.recombinations[original_branch])
@@ -212,14 +214,22 @@ class Project(object):
 
         return recombinations
 
-    def scan_replica_patches(self):
-        for original_branch in self.original_branches:
-            patches_branch = self.underlayer.branch_maps['original->patches'][original_branch]
-            patches_changes = self.underlayer.get_patches_changes(patches_branch)
-            for patches_change_id in patches_changes:
-                recombination = self.underlayer.get_recombination_from_patch_change(patches_change_id)
-                # TODO: handle new patchset on same branch-patches review.
-                recombination.handle_status()
+    def scan_replica_patches(self, patches_branch=None):
+        # Mutations are only handled one at a time per branch
+        if patches_branch:
+            patches_branches = [patches_branch]
+        else:
+            patches_branches = list()
+            for original_branch in self.original_branches:
+                patches_branches.append(self.underlayer.branch_maps['original->patches'][original_branch])
+
+        for patches_branch in patches_branches:
+            recombination, remaining_changes = self.underlayer.get_recombination_from_patches(patches_branch)
+            # TODO: handle new patchset on same branch-patches review.
+            recomb = recombination.__dict__
+            log.debugvar('recomb')
+            recombination.handle_status()
+            log.warning("Remaining mutation changes %s will be handled in order one at a time after recombination %s is completed " % (' '.join(remaining_changes), recombination.uuid))
 
     def check_approved_recombinations(self, recomb_id=None):
         if recomb_id:

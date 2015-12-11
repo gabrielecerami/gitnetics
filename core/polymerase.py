@@ -82,16 +82,12 @@ class Polymerase(object):
             #   logsummary.info("Problem with project %s: %s. Skipping" % (project_name, e))
         return success
 
-    def poll_replica(self, project_name=None, patches_change_id=None):
+    def poll_replica(self, patches_branch=None):
         success = True
         for project_name in self.projects:
             project=self.projects[project_name]
-            if patches_change_id:
-                if not project.new_replica_patch(patches_change_id):
-                    success = False
-            else:
-                if not project.scan_replica_patches():
-                    success = False
+            if not project.scan_replica_patches(patches_branch=patches_branch):
+                success = False
         return success
 
     def prepare_tests(self, tests_basedir, recomb_id=None):

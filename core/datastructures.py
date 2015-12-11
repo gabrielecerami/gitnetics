@@ -50,8 +50,9 @@ class Change(object):
             self.commit_message = infos['commit-message']
         if 'comments' in infos:
             self.comments = infos['comments']
-        self.code_review = infos['approvals']['code-review']
-        self.verified = infos['approvals']['verified']
+        if 'approvals' in infos:
+            self.code_review = infos['approvals']['code-review']
+            self.verified = infos['approvals']['verified']
 
     def submit(self):
         return self.remote.submit_change(self.number, self.patchset_number)
@@ -76,8 +77,11 @@ class Change(object):
         return True
 
     def is_approved(self):
-        if self.code_review >= 2 and self.verified >= 1:
-           return True
+        try:
+            if self.code_review >= 2 and self.verified >= 1:
+                return True
+        except AttributeError:
+            return False
         return False
 
     def abandon(self):
@@ -156,7 +160,7 @@ class Recombination(Change):
             "recombine-status": self.status,
         }
         try:
-            commit_message_data['target-replacement-branch'] = self.target_replacement_branch
+            commit_message_data['target-replacement-branch'] = str(self.target_replacement_branch)
         except AttributeError:
             pass
         try:
@@ -244,37 +248,37 @@ class Recombination(Change):
 
 class OriginalDiversityRecombination(Recombination):
 
-    def initialize(self, data, original_change=None, diversity_change=None, replica_change=None, mutation_change=None):
-        super(OriginalDiversityRecombination, self).initialize(remote=remote)
+    def initialize(self, remote, original_change=None, diversity_change=None):
+        super(OriginalDiversityRecombination, self).initialize(remote)
         try:
             self.original_change = original_change
             self.diversity_change = diversity_change
-            self.target_branch = "%s" % self.underlayer.branch_map['target']['original'][self.original_change.branch]
+            self.target_branch = self.underlayer.branch_maps['original->target'][self.original_change.branch]
             branch_id = "%s-%s" % (self.original_change.branch, self.original_change.revision)
             self.branch = "recomb-original-%s" % branch_id
             self.target_replacement_branch = "target-original-%s" % branch_id
             self.topic = self.original_change.uuid
         except NameError:
             raise MissingInfoError
-        self.set_status()
-
-    def load_metadata(self, original_remote=None, replica_remote=None, patches_remote=None):
-        super(OriginalDiversityRecombination, self)._load_metadata(metadata)
-        self.original_change = Change(remote=self.original_change)
-        self.original_change.load_from_remote(recomb_sources['main']['id'], branch=recomb_sources['main']['branch'])
-        # Set real commit as revision
-        self.original_change.revision = recomb_sources['main']['revision']
-        self.diversity_change = Change(remote=self.underlayer)
-        self.diversity_change.load_from_remote(recomb_sources['patches']['id'], branch=recomb_sources['patches']['branch'])
-        if 'target-replacement-branch' not in self.metadata:
-            self.metadata['target-replacement-branch'] = re.sub('recomb', 'target', self.branch)
-        self.target_replacement_branch = self.metadata['target-replacement-branch']
         self.main_source = self.original_change
         self.patches_source = self.diversity_change
         self.main_source_name = 'original'
         self.patches_source_name = 'diversity'
-        self.analyze_comments()
         self.set_status()
+
+    def load_change_data(self, change_data, original_remote=None, patches_remote=None, diversity_change=None):
+        self.main_source_name = 'original'
+        self.patches_source_name = 'diversity'
+        metadata = super(OriginalDiversityRecombination, self).load_change_data(change_data)
+        self.original_change = Change(remote=original_remote)
+        self.original_change.load_from_remote(metadata['sources']['main']['id'], branch=metadata['sources']['main']['branch'])
+        # Set real commit as revision
+        self.original_change.revision = metadata['sources']['main']['revision']
+        self.diversity_change = diversity_change
+        if 'target-replacement-branch' not in metadata:
+            self.target_replacement_branch = re.sub('recomb', 'target', self.branch)
+        self.main_source = self.original_change
+        self.patches_source = self.diversity_change
 
     def attempt(self):
         try:
@@ -299,7 +303,7 @@ class OriginalDiversityRecombination(Recombination):
             log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
             raise UploadError
 
-    def approved():
+    def approved(self):
         try:
             self.sync_replica(replica_branch)
         except RecombinationSyncReplicaError:
@@ -311,12 +315,12 @@ class OriginalDiversityRecombination(Recombination):
 
             log.error("Recombination not submitted")
 
-    def merged():
+    def merged(self):
         log.warning("branch is out of sync with original")
         self.sync_replica(replica_branch)
         self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
 
-    def present():
+    def present(self):
         pass
 
 
@@ -344,7 +348,7 @@ class EvolutionDiversityRecombination(Recombination):
             self.backport_change.commit_message = self.mangle_commit_message(self.evolution_change.commit_message)
         self.follow_backport_status()
 
-    def load_change_data(self, change_data, original_remote=None, replica_remote=None, patches_remote=None, diversity_change=None):
+    def load_change_data(self, change_data, original_remote=None, patches_remote=None, diversity_change=None):
         self.main_source_name = 'evolution'
         self.patches_source_name = 'diversity'
         metadata = super(EvolutionDiversityRecombination, self).load_change_data(change_data)
@@ -447,30 +451,33 @@ If you decide to discard this pick instead, please comment to this change with a
 
 class ReplicaMutationRecombination(Recombination):
 
-    def initialize(self, data, original_change=None, diversity_change=None, replica_change=None, mutation_change=None):
-        super(ReplicaMutationRecombination, self).initialize(remote=remote)
+    def initialize(self, remote, replica_change=None, mutation_change=None):
+        super(ReplicaMutationRecombination, self).initialize(remote)
         try:
             self.mutation_change = mutation_change
             self.replica_change = replica_change
-            branch_id = "%s-%s" % (self.replica_change.branch, self.replica_change.revision)
+            branch_id = "%s-%s" % (self.replica_change.branch, self.mutation_change.revision)
             self.branch = "recomb-patches-%s" % branch_id
             self.target_replacement_branch = "target-patches-%s" % branch_id
         except NameError:
             raise MissingInfoError
+        self.main_source = self.replica_change
+        self.patches_source = self.mutation_change
+        self.main_source_name = 'replica'
+        self.patches_source_name = 'mutation'
         self.set_status()
 
-    def load_metadata(self, original_remote=None, replica_remote=None, patches_remote=None):
-        self.replica_change = Change(remote=self.underlayer)
-        self.replica_change.load_from_remote(recomb_sources['main']['id'], branch=recomb_sources['main']['branch'])
-        self.mutation_change = Change(remote=patches_remote)
-        self.mutation_change.load_from_remote(recomb_sources['patches']['id'])
-        if 'target-replacement-branch' not in self.metadata:
-            self.metadata['target-replacement-branch'] = re.sub('recomb', 'target', self.branch)
-        self.target_replacement_branch = self.metadata['target-replacement-branch']
-        main_source = self.replica_change
-        patches_source = self.mutation_change
-        main_source_name = 'replica'
-        patches_source_name = 'mutation'
+    def load_change_data(self, change_data, replica_remote=None, mutation_change=None):
+        self.main_source_name = 'replica'
+        self.patches_source_name = 'mutation'
+        metadata = super(ReplicaMutationRecombination, self).load_change_data(change_data)
+        self.replica_change = Change(remote=replica_remote)
+        self.replica_change.load_from_remote(metadata['sources']['main']['id'], branch=metadata['sources']['main']['branch'])
+        self.mutation_change = mutation_change
+        if 'target-replacement-branch' not in metadata:
+            self.target_replacement_branch  = re.sub('recomb', 'target', self.branch)
+        self.main_source = self.replica_change
+        self.patches_source = self.mutation_change
 
 
     def attempt(self):
@@ -486,7 +493,16 @@ class ReplicaMutationRecombination(Recombination):
         self.underlayer.sync_replica(replica_branch, self.original_change.revision)
 
     def missing(self):
-        pass
+        try:
+            self.attempt()
+        except AttemptError:
+            log.error("Recombination attempt unsuccessful")
+            raise UploadError
+        try:
+            self.upload()
+        except UploadError:
+            log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
+            raise UploadError
 
     def approved(self):
         if self.mutation_change.status != "MERGED":

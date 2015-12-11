@@ -4,6 +4,7 @@ import pprint
 from ..colorlog import log
 from shellcommand import shell
 from ..datastructures import Change
+from collections import OrderedDict
 
 
 class Gerrit(object):
@@ -21,7 +22,7 @@ class Gerrit(object):
         for change_json in cmd.output:
             if change_json !='':
                 change = json.loads(change_json)
-                if "type" not in change or change['type'] != 'stats':
+                if "type" not in change or (change['type'] != 'stats' and change['type'] != 'error'):
                     changes_infos.append(change)
 
         log.debug("end query json")
@@ -92,15 +93,15 @@ class Gerrit(object):
         for change in ids[1:]:
             query_string = query_string + " OR %s:%s" % (criteria,change)
 #        uncomment this below and remove the if else block
-#        query_string = query_string + "\) AND project:%s AND NOT status:abandoned" % (self.project_name)
-        if self.name == 'original':
-            query_string = query_string + "\) AND project:openstack/nova AND NOT status:abandoned"
-        elif criteria == "commit":
-            query_string = query_string + "\) AND project:nova AND NOT status:abandoned"
-        elif criteria == "topic":
-            query_string = query_string + "\) AND project:nova-gitnetics AND NOT status:abandoned"
-        elif criteria == "change":
-            query_string = query_string + "\) AND \(project:nova OR project:nova-gitnetics\) AND NOT status:abandoned"
+        query_string = query_string + "\) AND project:%s AND NOT status:abandoned" % (self.project_name)
+#        if self.name == 'original':
+#            query_string = query_string + "\) AND project:openstack/nova AND NOT status:abandoned"
+#        elif criteria == "commit":
+#            query_string = query_string + "\) AND project:nova AND NOT status:abandoned"
+#        elif criteria == "topic":
+#            query_string = query_string + "\) AND project:nova-gitnetics AND NOT status:abandoned"
+#        elif criteria == "change":
+#            query_string = query_string + "\) AND \(project:nova OR project:nova-gitnetics\) AND NOT status:abandoned"
 
 
         if branch:
@@ -145,17 +146,26 @@ class Gerrit(object):
 
         return infos
 
-    def get_changes_data(self, search_values, search_field='change', results_key='id', branch=None):
+    def get_changes_data(self, search_values, search_field='change', results_key='id', branch=None, sort_key='number'):
         if type(search_values) is str or type(search_values) is unicode:
             search_values = [search_values]
 
         query_string = self.get_query_string(search_field, search_values, branch=branch)
         changes_data = self.query_changes_json(query_string)
 
-        data = dict()
+        changes_data.sort(key=lambda data: data[sort_key])
+        log.debugvar('changes_data')
+        data = OrderedDict()
         for gerrit_data in changes_data:
             norm_data = self.normalize_infos(gerrit_data)
             data[norm_data[results_key]] = norm_data
+
+        # fallback to local tracked repo
+        if not data and search_field == 'change' and branch is not None:
+            try:
+                data = self.local_track.get_changes_data(search_values, branch=branch)
+            except AttributeError:
+                pass
 
         return data
 
@@ -165,14 +175,14 @@ class Gerrit(object):
         if len(change_data) == 1:
             change_data = change_data.popitem()[1]
         else:
-            raise MultipleValuesError
+            return None
 
         return change_data
 
     def get_changes(self, search_values, search_field='change', results_key='id', branch=None):
         change_data = self.get_changes_data(search_values, search_field=search_field, results_key=results_key, branch=branch)
 
-        changes = dict()
+        changes = OrderedDict()
         for key in change_data:
             change = Change(remote=self)
             change.load_data(change_data[key])
@@ -186,7 +196,7 @@ class Gerrit(object):
         if len(change_data) == 1:
             change = change_data.popitem()[1]
         else:
-            raise MultipleValuesError
+            return None
 
         return change
 
@@ -195,8 +205,8 @@ class Gerrit(object):
             change_query = 'AND change:%s' % recomb_id
         else:
             change_query = ''
-#        query = "'owner:self AND project:%s %s AND branch:^recomb-.*-%s.* AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND NOT status:abandoned)'"  % (self.project_name, change_query, branch)
-        query = "'owner:self AND project:nova-gitnetics %s AND branch:^recomb-.*-%s.* AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND NOT status:abandoned)'"  % (change_query, branch)
+        query = "'owner:self AND project:%s %s AND branch:^recomb-.*-%s.* AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND NOT status:abandoned)'"  % (self.project_name, change_query, branch)
+#        query = "'owner:self AND project:nova-gitnetics %s AND branch:^recomb-.*-%s.* AND ( NOT label:Code-Review+2 AND NOT label:Verified+1 AND NOT status:abandoned)'"  % (change_query, branch)
         untested_recombs = self.query_changes_json(query)
         log.debugvar('untested_recombs')
         return untested_recombs

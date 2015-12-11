@@ -19,7 +19,7 @@ class Git(object):
 
     def __init__(self, directory):
         self.directory = directory
-        self.remotes = {}
+        self.remotes = dict()
         try:
             os.mkdir(self.directory)
         except OSError:
@@ -36,19 +36,21 @@ class Git(object):
         revision = cmd.output[0].rstrip('\n')
         return revision
 
-    def addremote(self, name, url, fetch=True):
+    def addremote(self, repo, fetch=True):
         os.chdir(self.directory)
-        cmd = shell('git remote | grep ^%s$' % name)
+        cmd = shell('git remote | grep ^%s$' % repo.name)
         if cmd.returncode != 0:
-            shell('git remote add %s %s' % (name, url))
+            shell('git remote add %s %s' % (repo.name, repo.url))
         if fetch:
-            cmd = shell('git fetch %s' % (name))
+            cmd = shell('git fetch %s' % (repo.name))
             if cmd.returncode != 0:
                 raise RemoteFetchError
+        self.remotes[repo.name] = repo
 
     def add_gerrit_remote(self, name, location, project_name, fetch=True, fetch_changes=True):
-        self.remotes[name] = Gerrit(name, location, project_name)
-        self.addremote(name, self.remotes[name].url, fetch=fetch)
+        repo = Gerrit(name, location, project_name)
+        self.addremote(repo, fetch=fetch)
+        repo.local_track = TrackedRepo(name, self.directory, project_name)
         if fetch_changes:
             shell('git fetch %s +refs/changes/*:refs/remotes/%s/changes/*' % (name, name))
         try:
@@ -57,8 +59,8 @@ class Git(object):
             shell('scp -p %s:hooks/commit-msg .git/hooks/' % location)
 
     def add_git_remote(self, name, location, project_name, fetch=True):
-        self.remotes[name] = RemoteGit(name, location, self.directory, project_name)
-        self.addremote(name, self.remotes[name].url, fetch=fetch)
+        repo = RemoteGit(name, self.directory, project_name, location=location)
+        self.addremote(repo, fetch=fetch)
 
     def list_branches(self, remote_name, pattern=''):
         os.chdir(self.directory)
@@ -109,6 +111,9 @@ class Git(object):
 
         return commit_list
 
+    def revision_exists(self, remote, revision, branch):
+        cmd = shell("git ")
+        return True
 
 class Underlayer(Git):
 
@@ -171,7 +176,7 @@ class Underlayer(Git):
 
     def set_replica_mirror(self, location, name):
         self.add_git_remote('replica-mirror', project_info['replica']['mirror'], self.replica_project['name'], fetch=False)
-        self.mirror_remote = self.remotes['replica-mirror']
+        self.mirror_remote = self.remote['replica-mirror']
 
     def delete_service_branches(self):
         if self.mirror_remote:
@@ -297,7 +302,7 @@ class Underlayer(Git):
         pick_revision = recombination.main_source.revision
         merge_revision = recombination.patches_source.revision
         patches_branch = recombination.patches_source.branch
-        target_replacement_branch = recombination.target-replacement-branch
+        target_replacement_branch = recombination.target_replacement_branch
 
         # Branch prep
         # local patches branch
@@ -305,9 +310,9 @@ class Underlayer(Git):
         # local recomb branch
         cmd = shell('git rev-parse %s~1' % pick_revision)
         starting_revision = cmd.output[0]
-        shell('git checkout -B %s %s' % (recombination_branch, starting_revision))
+        shell('git checkout -B %s %s' % (recombination.branch, starting_revision))
         log.info("Creating remote disposable branch on replica")
-        cmd = shell('git push replica HEAD:%s' % recombination_branch)
+        cmd = shell('git push replica HEAD:%s' % recombination.branch)
         if cmd.returncode != 0:
             raise PushError
 
@@ -344,7 +349,7 @@ class Underlayer(Git):
         while merge.returncode != 0 and patches_removal_queue:
             attempt_number += 1
 
-            shell('git reset --hard %s' % recombination_branch)
+            shell('git reset --hard %s' % recombination.branch)
 
             shell('git checkout recomb_attempt-%s-base' % patches_branch)
             retry_branch = 'recomb_attempt-%s-retry_%s' % (patches_branch, attempt_number)
@@ -355,7 +360,7 @@ class Underlayer(Git):
             cmd = shell('git rev-parse %s' % retry_branch)
             retry_merge_revision = cmd.output[0]
 
-            shell('git checkout %s' % recombination_branch)
+            shell('git checkout %s' % recombination.branch)
             merge = shell("git merge --stat --squash --no-commit %s %s" % (pick_revision, retry_merge_revision))
 
             if merge.returncode != 0:
@@ -379,6 +384,7 @@ class Underlayer(Git):
                 shell('git branch -D %s' % retry_branch)
             else:
                 logsummary.warning("automatic resolution attempt %d succeeded" % attempt_number)
+                merge_revision = retry_merge_revision
                 removed_commits.append(next_patch_toremove)
                 logsummary.info("removed commits")
                 logsummary.info(removed_commits)
@@ -388,7 +394,7 @@ class Underlayer(Git):
 
         if merge.returncode != 0:
             logsummary.error("automatic resolution failed")
-            shell('git push replica :%s' % recombination_branch)
+            shell('git push replica :%s' % recombination.branch)
         else:
             logsummary.info("Recombination successful")
             # create new patches-branch
@@ -397,11 +403,12 @@ class Underlayer(Git):
                 shell('git push replica %s:refs/heads/%s' % (retry_branch, patches_branch))
                 shell('git branch -D %s' % retry_branch)
 
+            recombination.status = "SUCCESSFUL"
             self.commit_recomb(recombination)
 
             # Create target branch replacement for this recombination
             shell('git checkout -B %s %s' % (target_replacement_branch, starting_revision))
-            cmd = shell("git merge --log --no-edit %s %s" % (pick_revision, retry_merge_revision))
+            cmd = shell("git merge --log --no-edit %s %s" % (pick_revision, merge_revision))
             if cmd.returncode == 0:
                 shell('git push replica HEAD:%s' % target_replacement_branch)
 
@@ -494,7 +501,7 @@ class Underlayer(Git):
         return dirlist
 
     def get_patches_changes(self, patches_branch):
-        return self.patches_remote.get_changes(patches_branch, search_field='branch', branch=patches_branch )
+        return self.patches_remote.get_changes(patches_branch, search_field='branch', branch=patches_branch)
 
     def get_original_ids(self, commits):
         ids = OrderedDict()
@@ -526,25 +533,27 @@ class Underlayer(Git):
 
         return recombination
 
-    def get_recombination_from_patch_change(self, patches_change_id):
+    def get_recombination_from_patches(self, patches_branch):
         recombination = ReplicaMutationRecombination(self, self.recomb_remote)
-        data = self.patches_remote.get_changes_data(patches_change_id, search_field='topic', results_key='topic')
-        if patches_change_id in infos:
+        mutation_changes = self.get_patches_changes(patches_branch)
+        # Pick up only the first in the list
+        mutation_change_id, mutation_change = mutation_changes.popitem(last=False)
+        recomb_data = self.recomb_remote.get_change_data(mutation_change_id, search_field='topic', results_key='topic')
+        if recomb_data:
             # Load existing
-            recombination.load_data(data) (self, remote=self.recomb_remote, patches_remote=self.patches_remote, infos=infos[patches_change_id])
+            recombination.load_change_data(recomb_data, replica_remote=self.replica_remote, mutation_change=mutation_change)
         else:
-            mutation_change = self.patches_remote.get_change(patches_change_id)
             patches_branch = mutation_change.branch
             change = Change(remote=self.replica_remote)
-            change.branch = self.replica_branches['patches:' + patches_branch]
+            change.branch = self.branch_maps['patches->replica'][patches_branch]
             change.revision = self.get_revision("remotes/replica/%s" % change.branch)
             change.parent = self.get_revision("remotes/replica/%s~1" % change.branch)
             change.uuid = change.revision
 
-            recombination.initialize(self, "replica-mutation", replica_change=change, mutation_change=mutation_change)
-            recombination.topic = patches_change_id
+            recombination.initialize(self.recomb_remote, replica_change=change, mutation_change=mutation_change)
+            recombination.topic = mutation_change_id
 
-        return recombination
+        return recombination, mutation_changes
 
     def get_backport_change():
         pass
@@ -552,7 +561,7 @@ class Underlayer(Git):
     def get_recombinations_from_original(self, original_branch, original_ids, diversity_refname, replication_strategy):
         patches_branch = self.branch_maps['original->patches'][original_branch]
         diversity_revision = self.get_revision(diversity_refname)
-        diversity_change = self.patches_remote.get_change(diversity_revision, search_field='commit', branch=patches_branch)
+        diversity_change = self.patches_remote.local_track.get_change(diversity_revision, branch=patches_branch)
         recombinations = OrderedDict()
         original_changes = self.original_remote.get_changes(list(original_ids), branch=original_branch)
         recomb_data = self.recomb_remote.get_changes_data(list(original_ids), search_field='topic', results_key='topic')
@@ -621,18 +630,20 @@ class Underlayer(Git):
         return self.recomb_remote.get_change(recomb_id)
 
 
-class RemoteGit(Git):
+class TrackedRepo(Git):
 
-    def __init__(self, name, location, directory, project_name):
+    def __init__(self, name, directory, project_name):
         self.name = name
-        self.url = "git@%s:%s" % (location, project_name)
         self.directory = directory
         self.project_name = project_name
-
 
     def get_changes_data(self, search_values, search_field='commit', results_key='revision', branch=None):
         if type(search_values) is str or type(search_values) is unicode:
             search_values = [search_values]
+
+        if search_field != 'commit':
+            log.error('Tracked repo search does not support search by %s' % search_field)
+            return None
 
         changes_data = dict()
         os.chdir(self.directory)
@@ -651,21 +662,39 @@ class RemoteGit(Git):
 
         return changes_data
 
+    def get_change_data(self, search_value, search_field='commit', results_key='revision', branch=None):
+        change_data = self.get_changes_data(search_value, search_field=search_field, results_key=results_key, branch=branch)
+
+        if len(change_data) == 1:
+            change_data = change_data.popitem()[1]
+        else:
+            return None
+
+        return change_data
+
     def get_changes(self, search_values, search_field='commit', results_key='revision', branch=None):
         changes_data = self.get_changes_data(search_values, search_field=search_field, results_key=results_key, branch=branch)
 
-        changes = dict()
+        changes = OrderedDict()
         for key in changes_data:
             change = Change(remote=self)
-            changes[infos[results_key]] = change.load_data(changes_data[key])
+            change.load_data(changes_data[key])
+            changes[key] = change
         return changes
 
-    def get_change(self, search_values, search_field='change', results_key='id', branch=None):
+    def get_change(self, search_values, search_field='commit', results_key='revision', branch=None):
         change_data = self.get_changes(search_values, search_field=search_field, results_key=results_key, branch=branch)
 
-        if len(changes) == 1:
+        if len(change_data) == 1:
             change = change_data.popitem()[1]
         else:
-            raise MultipleValuesError
+            return None
 
         return change
+
+class RemoteGit(TrackedRepo):
+
+    def __init__(self, name, location, directory, project_name):
+        super(RemoteGit, self).__init__(name, directory, project_name)
+        self.url = "git@%s:%s" % (location, project_name)
+
