@@ -30,7 +30,10 @@ class Project(object):
         self.rev_deps = None
         if 'rev-deps' in project_info:
             self.rev_deps = project_info['rev-deps']
-        self.test_types = project_info["replica"]["tests"]
+        if project_info["replica"]["tests"] is not None:
+            self.test_types = project_info["replica"]["tests"]
+        else:
+            self.test_types = []
         self.replication_strategy = project_info['replication-strategy']
         self.test_minimum_score = 0
 
@@ -84,7 +87,12 @@ class Project(object):
         current_slice = {}
 
         # Slice
-        for index, recomb_id in enumerate(list(recombinations)):
+        if recombinations:
+            recomb_list = list(recombinations)
+        else:
+            recomb_list = []
+
+        for index, recomb_id in enumerate(recomb_list):
             replica_change = recombinations[recomb_id]
 
             # creates slices to apply to change list
@@ -211,8 +219,8 @@ class Project(object):
 
         if original_ids:
             recombinations = self.underlayer.get_recombinations_from_original(original_branch, original_ids, diversity_refname, self.replication_strategy)
-
-        return recombinations
+            return recombinations
+        return None
 
     def scan_replica_patches(self, patches_branch=None):
         # Mutations are only handled one at a time per branch
@@ -229,7 +237,8 @@ class Project(object):
             recomb = recombination.__dict__
             log.debugvar('recomb')
             recombination.handle_status()
-            log.warning("Remaining mutation changes %s will be handled in order one at a time after recombination %s is completed " % (' '.join(remaining_changes), recombination.uuid))
+            if remaining_changes:
+                log.warning("Remaining mutation changes %s will be handled in order one at a time after recombination %s is completed " % (' '.join(remaining_changes), recombination.uuid))
 
     def check_approved_recombinations(self, recomb_id=None):
         if recomb_id:
@@ -264,6 +273,7 @@ class Project(object):
             tests = dict()
             projects = self.get_reverse_dependencies(tags=['included','contained','required','classes', 'functions'])
             projects[self.project_name] = self.test_types
+            log.debugvar('projects')
             for name in projects:
                 tests[name] = dict()
                 tests[name]["types"] = dict()
@@ -297,18 +307,19 @@ class Project(object):
             recombination = self.underlayer.get_recombination(recomb_id)
             test_score, test_analysis = self.get_test_score(test_results[recomb_id])
             if test_score > self.test_minimum_score:
-                comment_data = dict()
-                comment_data['backport-test-results'] = dict()
-                build_url = os.environ.get('BUILD_URL')
-                if build_url:
-                    comment_data['backport-test-results']['message'] = "test-link: %s" % build_url
-                else:
-                    comment_data['backport-test-results']['message'] = ""
-                comment_data['backport-test-results']['Code-Review'] = 0
-                comment_data['backport-test-results']['Verified'] = "1"
-                comment_data['backport-test-results']['reviewers'] = self.replica_project['success_reviewers_list']
-                comment = yaml.dump(comment_data)
-                recombination.comment(comment)
+                if self.replication_strategy == "lock-and-backports":
+                    comment_data = dict()
+                    comment_data['backport-test-results'] = dict()
+                    build_url = os.environ.get('BUILD_URL')
+                    if build_url:
+                        comment_data['backport-test-results']['message'] = "test-link: %s" % build_url
+                    else:
+                        comment_data['backport-test-results']['message'] = ""
+                    comment_data['backport-test-results']['Code-Review'] = 0
+                    comment_data['backport-test-results']['Verified'] = "1"
+                    comment_data['backport-test-results']['reviewers'] = self.replica_project['success_reviewers_list']
+                    comment = yaml.dump(comment_data)
+                    recombination.comment(comment)
                 recombination.approve()
                 logsummary.info("Recombination %s Approved" % recomb_id)
             else:

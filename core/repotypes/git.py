@@ -59,7 +59,7 @@ class Git(object):
             shell('scp -p %s:hooks/commit-msg .git/hooks/' % location)
 
     def add_git_remote(self, name, location, project_name, fetch=True):
-        repo = RemoteGit(name, self.directory, project_name, location=location)
+        repo = RemoteGit(name, location, self.directory, project_name)
         self.addremote(repo, fetch=fetch)
 
     def list_branches(self, remote_name, pattern=''):

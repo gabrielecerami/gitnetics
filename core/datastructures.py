@@ -253,7 +253,6 @@ class OriginalDiversityRecombination(Recombination):
         try:
             self.original_change = original_change
             self.diversity_change = diversity_change
-            self.target_branch = self.underlayer.branch_maps['original->target'][self.original_change.branch]
             branch_id = "%s-%s" % (self.original_change.branch, self.original_change.revision)
             self.branch = "recomb-original-%s" % branch_id
             self.target_replacement_branch = "target-original-%s" % branch_id
@@ -277,6 +276,8 @@ class OriginalDiversityRecombination(Recombination):
         self.diversity_change = diversity_change
         if 'target-replacement-branch' not in metadata:
             self.target_replacement_branch = re.sub('recomb', 'target', self.branch)
+        else:
+            self.target_replacement_branch = metadata['target-replacement-branch']
         self.main_source = self.original_change
         self.patches_source = self.diversity_change
 
@@ -287,7 +288,8 @@ class OriginalDiversityRecombination(Recombination):
         except AttemptError:
             raise AttemptError
 
-    def sync_replica(self, replica_branch):
+    def sync_replica(self):
+        replica_branch = self.underlayer.branch_maps['original->replica'][self.original_change.branch]
         log.info("Advancing replica branch %s to %s " % (replica_branch, self.original_change.revision))
         self.underlayer.sync_replica(replica_branch, self.original_change.revision)
 
@@ -303,22 +305,25 @@ class OriginalDiversityRecombination(Recombination):
             log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
             raise UploadError
 
+    def update_target_branch(self):
+        target_branch = self.underlayer.branch_maps['original->target'][self.original_change.branch]
+        self.underlayer.update_target_branch(self.target_replacement_branch, target_branch)
+
     def approved(self):
         try:
-            self.sync_replica(replica_branch)
+            self.sync_replica()
         except RecombinationSyncReplicaError:
             log.error("Replica could not be synced")
-        self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
+        self.update_target_branch()
         try:
             self.submit()
         except RecombinationSubmitError:
-
             log.error("Recombination not submitted")
 
     def merged(self):
         log.warning("branch is out of sync with original")
-        self.sync_replica(replica_branch)
-        self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
+        self.sync_replica()
+        self.update_target_branch()
 
     def present(self):
         pass
@@ -476,6 +481,8 @@ class ReplicaMutationRecombination(Recombination):
         self.mutation_change = mutation_change
         if 'target-replacement-branch' not in metadata:
             self.target_replacement_branch  = re.sub('recomb', 'target', self.branch)
+        else:
+            self.target_replacement_branch = metadata['target-replacement-branch']
         self.main_source = self.replica_change
         self.patches_source = self.mutation_change
 
@@ -488,7 +495,8 @@ class ReplicaMutationRecombination(Recombination):
             raise AttemptError
         # patches_revision = self.project.get_revision(self.patches.revision)
 
-    def sync_replica(self, replica_branch):
+    def sync_replica(self):
+        replica_branch = self.replica_change.branch
         log.info("Advancing replica branch %s to %s " % (replica_branch, self.original_change.revision))
         self.underlayer.sync_replica(replica_branch, self.original_change.revision)
 
@@ -504,8 +512,12 @@ class ReplicaMutationRecombination(Recombination):
             log.error("upload of recombination with change %s did not succeed. Exiting" % self.uuid)
             raise UploadError
 
+    def update_target_branch(self):
+        target_branch = self.underlayer.branch_maps['replica->target'][self.replica_change.branch]
+        self.underlayer.update_target_branch(self.target_replacement_branch, target_branch)
+
     def approved(self):
-        if self.mutation_change.status != "MERGED":
+        if self.mutation_change.remote_status != "MERGED":
             try:
                 self.mutation_change.approve()
                 self.mutation_change.submit()
@@ -513,8 +525,8 @@ class ReplicaMutationRecombination(Recombination):
                 log.error("Originating change approval failed")
             except RecombinationSubmitError:
                 log.error("Originating change submission failed")
-        self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
-        if self.status != "MERGED":
+        self.update_target_branch()
+        if self.remote_status != "MERGED":
             self.submit()
         else:
             log.warning("Recombination already submitted")
@@ -525,8 +537,8 @@ class ReplicaMutationRecombination(Recombination):
 
     def merged(self):
         log.warning("branch is out of sync with original")
-        self.sync_replica(replica_branch)
-        self.underlayer.update_target_branch(self.target_replacement_branch, self.target_branch)
+        self.sync_replica()
+        self.update_target_branch()
 
     def present(self):
         pass

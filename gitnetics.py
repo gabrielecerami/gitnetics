@@ -89,6 +89,7 @@ if __name__=="__main__":
             if 'vars.yaml' in files:
                 with open(os.path.join(root, "vars.yaml")) as var_file:
                     test_vars = yaml.load(var_file)
+                log.debugvar('test_vars')
                 target_project = test_vars['target_project']
                 try:
                     exists = test_results[target_project]
