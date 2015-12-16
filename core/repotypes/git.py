@@ -11,7 +11,7 @@ from shellcommand import shell
 from ..datastructures import Change, EvolutionDiversityRecombination, OriginalDiversityRecombination, ReplicaMutationRecombination, Recombination
 from gerrit import Gerrit
 from ..colorlog import log, logsummary
-from ..exceptions import RecombinationCanceledError, RecombinationFailed
+from ..exceptions import RecombinationCanceledError, RecombinationFailed, RemoteFetchError
 from collections import OrderedDict
 
 
@@ -568,7 +568,7 @@ class Underlayer(Git):
 
         return recomb_type, branch
 
-    def get_backport_change():
+underlayer.    def get_backport_change():
         pass
 
     def get_recombinations_from_original(self, original_branch, original_ids, diversity_refname, replication_strategy, replica_lock):

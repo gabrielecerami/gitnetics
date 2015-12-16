@@ -40,3 +40,6 @@ class RecombinationDataExpired(Exception):
 
 class RecombinationCanceledError(Exception):
     pass
+
+class RemoteFetchError(Exception):
+    pass
