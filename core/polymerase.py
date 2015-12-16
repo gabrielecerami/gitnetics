@@ -117,17 +117,11 @@ class Polymerase(object):
                 else:
                     project.vote_recombinations(project_test_results)
 
-    def check_approved_recombinations(self, project_name=None, recomb_id=None):
-        success = True
-        if recomb_id:
+    def check_approved_recombinations(self, recomb_id=None):
+        for project_name in self.projects:
+            log.info("Checking project '%s'" % project_name)
             project = self.projects[project_name]
-            recombination = project.get_recombination(recomb_id)
-            project.check_approved_recombinations(recombination=recombination)
-        else:
-            for project_name in self.projects:
-                log.info("Checking project '%s'" % project_name)
-                project = self.projects[project_name]
-                project.check_approved_recombinations()
+            project.check_approved_recombinations(recomb_id=recomb_id)
 
     def janitor(self):
         for project_name in self.projects:

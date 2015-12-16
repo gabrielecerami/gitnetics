@@ -299,6 +299,7 @@ class Underlayer(Git):
         shell('git fetch replica')
         shell('git fetch original')
 
+        removed_commits = list()
         pick_revision = recombination.main_source.revision
         merge_revision = recombination.patches_source.revision
         patches_branch = recombination.patches_source.branch
@@ -324,7 +325,6 @@ class Underlayer(Git):
         if merge.returncode != 0:
             attempt_number = 0
             patches_base = dict()
-            removed_commits = list()
             log.error("first attempt at merge failed")
             cmd = shell('git status --porcelain')
             prev_conflict_status = cmd.output
@@ -398,10 +398,12 @@ class Underlayer(Git):
         else:
             logsummary.info("Recombination successful")
             # create new patches-branch
+            # TODO: understand if this can be a automatic task or we just notify someone
             if retry_branch:
                 shell('git push replica :%s' % patches_branch)
                 shell('git push replica %s:refs/heads/%s' % (retry_branch, patches_branch))
                 shell('git branch -D %s' % retry_branch)
+            recombination.removed_patches_commits = removed_commits
 
             recombination.status = "SUCCESSFUL"
             self.commit_recomb(recombination)
@@ -479,7 +481,7 @@ class Underlayer(Git):
 
     def update_target_branch(self, target_replacement_branch, target_branch):
         shell('git fetch replica')
-        shell('git branch remotes/replica/%s' % (target_replacement_branch))
+        shell('git checkout remotes/replica/%s' % (target_replacement_branch))
         shell('git push -f replica HEAD:%s' % (target_branch))
         shell('git checkout parking')
         shell('git push replica :%s ' % target_replacement_branch)
@@ -537,28 +539,45 @@ class Underlayer(Git):
         recombination = ReplicaMutationRecombination(self, self.recomb_remote)
         mutation_changes = self.get_patches_changes(patches_branch)
         # Pick up only the first in the list
-        mutation_change_id, mutation_change = mutation_changes.popitem(last=False)
-        recomb_data = self.recomb_remote.get_change_data(mutation_change_id, search_field='topic', results_key='topic')
-        if recomb_data:
-            # Load existing
-            recombination.load_change_data(recomb_data, replica_remote=self.replica_remote, mutation_change=mutation_change)
-        else:
-            patches_branch = mutation_change.branch
-            change = Change(remote=self.replica_remote)
-            change.branch = self.branch_maps['patches->replica'][patches_branch]
-            change.revision = self.get_revision("remotes/replica/%s" % change.branch)
-            change.parent = self.get_revision("remotes/replica/%s~1" % change.branch)
-            change.uuid = change.revision
+        if mutation_changes:
+            mutation_change_id, mutation_change = mutation_changes.popitem(last=False)
+            recomb_data = self.recomb_remote.get_change_data(mutation_change_id, search_field='topic', results_key='topic')
+            if recomb_data:
+                # Load existing
+                recombination.load_change_data(recomb_data, replica_remote=self.replica_remote, mutation_change=mutation_change)
+            else:
+                patches_branch = mutation_change.branch
+                change = Change(remote=self.replica_remote)
+                change.branch = self.branch_maps['patches->replica'][patches_branch]
+                change.revision = self.get_revision("remotes/replica/%s" % change.branch)
+                change.parent = self.get_revision("remotes/replica/%s~1" % change.branch)
+                change.uuid = change.revision
 
-            recombination.initialize(self.recomb_remote, replica_change=change, mutation_change=mutation_change)
-            recombination.topic = mutation_change_id
+                recombination.initialize(self.recomb_remote, replica_change=change, mutation_change=mutation_change)
+                recombination.topic = mutation_change_id
 
-        return recombination, mutation_changes
+            return recombination, mutation_changes
+        return None, None
+
+    def get_recombination_by_id(self, recomb_id):
+        recomb = Recombination(self, self.recomb_remote)
+        data = self.recomb_remote.get_change(recomb_id)
+        metadata = recomb.load_change_data(data)
+        recomb_type = metadata['recomb-type']
+        if recomb_type = "original-diversity":
+            recombination = OriginalDiversityRecombination(self, self.recomb_remote)
+        elif recomb_type = "replica-mutation":
+            recombination = OriginalDiversityRecombination(self, self.recomb_remote)
+        elif recomb_type = "evolution-diversity":
+            recombination = OriginalDiversityRecombination(self, self.recomb_remote)
+
+        recombination.load_change_data(data):
+        return recomb_type, recombination
 
     def get_backport_change():
         pass
 
-    def get_recombinations_from_original(self, original_branch, original_ids, diversity_refname, replication_strategy):
+    def get_recombinations_from_original(self, original_branch, original_ids, diversity_refname, replication_strategy, replica_lock):
         patches_branch = self.branch_maps['original->patches'][original_branch]
         diversity_revision = self.get_revision(diversity_refname)
         diversity_change = self.patches_remote.local_track.get_change(diversity_revision, branch=patches_branch)
@@ -588,7 +607,6 @@ class Underlayer(Git):
                 # Set real commit as revision
                 original_changes[change_id].revision = original_ids[change_id]
                 if replication_strategy == "lock-and-backports":
-                    replica_lock = "2015.1.2"
                     lock_revision = self.get_revision(replica_lock)
                     cmd = shell('git show -s --pretty=format:"%%an <%%ae>" %s' % original_ids[change_id])
                     author = cmd.output[0]

@@ -30,10 +30,11 @@ class Project(object):
         self.rev_deps = None
         if 'rev-deps' in project_info:
             self.rev_deps = project_info['rev-deps']
-        if project_info["replica"]["tests"] is not None:
+
+        self.test_types = []
+        if "tests" in project_info['replica'] and project_info["replica"]["tests"] is not None:
             self.test_types = project_info["replica"]["tests"]
-        else:
-            self.test_types = []
+
         self.replication_strategy = project_info['replication-strategy']
         self.test_minimum_score = 0
 
@@ -217,8 +218,12 @@ class Project(object):
         diversity_refname = "replica/%s" % (patches_branch)
         original_ids = self.underlayer.get_original_ids(commits)
 
+        replica_lock = None
+        if replica_branch in self.ref_locks:
+            replica_lock = self.ref_locks[replica_branch]
+
         if original_ids:
-            recombinations = self.underlayer.get_recombinations_from_original(original_branch, original_ids, diversity_refname, self.replication_strategy)
+            recombinations = self.underlayer.get_recombinations_from_original(original_branch, original_ids, diversity_refname, self.replication_strategy, replica_lock)
             return recombinations
         return None
 
@@ -236,22 +241,25 @@ class Project(object):
             # TODO: handle new patchset on same branch-patches review.
             recomb = recombination.__dict__
             log.debugvar('recomb')
-            recombination.handle_status()
-            if remaining_changes:
-                log.warning("Remaining mutation changes %s will be handled in order one at a time after recombination %s is completed " % (' '.join(remaining_changes), recombination.uuid))
+            if recombination:
+                recombination.handle_status()
+                if remaining_changes:
+                    log.warning("Remaining mutation changes %s will be handled in order one at a time after recombination %s is completed " % (' '.join(remaining_changes), recombination.uuid))
+            else:
+                logsummary.info("Project %s no new patches in patches branch %s" % (self.project_name, patches_branch))
 
     def check_approved_recombinations(self, recomb_id=None):
         if recomb_id:
-            recombination = self.underlayer.get_recombination_from_id(recomb_id)
-            if recombination.recomb_type == 'replica-mutation':
-                recombination.handle_status()
-            elif recombination.recomb_type == 'original-diversity' or recombination.recomb_type == "evolution-diversity":
-                return self.scan_original_distance(branch=recombination.original.branch)
+            recomb_type, recombination = self.underlayer.get_recombination_by_id(recomb_id)
+            if recomb_type == 'replica-mutation':
+                patches_branch = self.underlayer.branch_maps['replica->patches'][recombination.replica_change.branch]
+                self.scan_replica_patches(patches_branch=patches_branch)
+            elif recomb_type == 'original-diversity' or recomb_type == "evolution-diversity":
+                return self.scan_original_distance(branch=recombination.original_change.branch)
         else:
             for branch in self.original_branches:
-                recombination = self.underlayer.get_recombination_in_patches_branch(branch)
-                for recombination in recombinations:
-                    recombination.handle_status()
+                patches_branch = self.underlayer.branch_maps['original->patches'][branch]
+                self.scan_replica_patches(patches_branch=patches_branch)
                 self.scan_original_distance(branch)
 
     def get_reverse_dependencies(self, tags=[]):
@@ -266,27 +274,32 @@ class Project(object):
     def fetch_untested_recombinations(self, test_basedir, recomb_id=None):
         changes_infos = dict()
         dirlist = self.underlayer.fetch_recombinations(test_basedir, "untested", recomb_id=recomb_id)
+
         if not dirlist:
             logsummary.info("Project '%s': no untested recombinations" % self.project_name)
 
-        for change_number in dirlist:
-            tests = dict()
-            projects = self.get_reverse_dependencies(tags=['included','contained','required','classes', 'functions'])
-            projects[self.project_name] = self.test_types
-            log.debugvar('projects')
-            for name in projects:
-                tests[name] = dict()
-                tests[name]["types"] = dict()
-                for test_type in projects[name]:
-                    result_file = "%s/%s/results/%s/%s_results.xml" % (self.project_name, change_number, test_type, name)
-                    tests[name]["types"][test_type] = result_file
-            changes_infos[change_number] = {
-                "target_project" : self.project_name,
-                'recombination_dir': dirlist[change_number],
-                "recombination_id" : change_number,
-                "tests": tests ,
-            }
-            logsummary.info("Fetched recombination %s on dir %s" % (change_number, dirlist[change_number]))
+        if not self.test_types:
+            logsummary.info("Project '%s': no tests specified" % self.project_name)
+        else:
+            for change_number in dirlist:
+                tests = dict()
+                projects = self.get_reverse_dependencies(tags=['included','contained','required','classes', 'functions'])
+                projects[self.project_name] = self.test_types
+                log.debugvar('projects')
+                for name in projects:
+                    tests[name] = dict()
+                    tests[name]["types"] = dict()
+                    for test_type in projects[name]:
+                        result_file = "%s/%s/results/%s/%s_results.xml" % (self.project_name, change_number, test_type, name)
+                        tests[name]["types"][test_type] = result_file
+                changes_infos[change_number] = {
+                    "target_project" : self.project_name,
+                    'recombination_dir': dirlist[change_number],
+                    "recombination_id" : change_number,
+                    "tests": tests ,
+                }
+                logsummary.info("Fetched recombination %s on dir %s" % (change_number, dirlist[change_number]))
+
         return changes_infos
 
     def get_test_score(self, test_results):

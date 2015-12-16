@@ -167,6 +167,10 @@ class Recombination(Change):
             commit_message_data['sources']['patches']['commit-message'] = literal_unicode(self.backport_change.commit_message)
         except AttributeError:
             pass
+        try:
+            commit_message_data['removed-patches-commits'] = self.removed_patches_commits)
+        except AttributeError:
+            pass
         # metadata['sources']['patches']['commit-message']
         # if 'commit-message' in self.metadata['sources']['patches']:
         return commit_message_data
@@ -236,15 +240,15 @@ class Recombination(Change):
         except (ValueError, yaml.scanner.ScannerError,yaml.parser.ParserError):
             log.error("commit message not in yaml")
             raise DecodeError
+        header = metadata['Recombination']
+        recomb_header = header.split('~')[0]
+        metadata['recomb_type'] = re.sub(':[a-zA-Z0-9]{6}', '',recomb_header)
         if 'recombine-status' in metadata:
             self.status = metadata['recombine-status']
         metadata.update(self.analyze_comments())
         self.set_status(metadata=metadata)
         return metadata
         #recomb_sources = metadata['sources']
-        #header = metadata['Recombination']
-        #recomb_header = header.split('~')[0]
-        # self.recomb_type = re.sub(':[a-zA-Z0-9]{6}', '',recomb_header)
 
 class OriginalDiversityRecombination(Recombination):
 
