@@ -568,7 +568,7 @@ class Underlayer(Git):
 
         return recomb_type, branch
 
-underlayer.    def get_backport_change():
+    def get_backport_change():
         pass
 
     def get_recombinations_from_original(self, original_branch, original_ids, diversity_refname, replication_strategy, replica_lock):
