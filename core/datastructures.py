@@ -242,7 +242,7 @@ class Recombination(Change):
             raise DecodeError
         header = metadata['Recombination']
         recomb_header = header.split('~')[0]
-        metadata['recomb_type'] = re.sub(':[a-zA-Z0-9]{6}', '',recomb_header)
+        metadata['recomb-type'] = re.sub(':[a-zA-Z0-9]{6}', '',recomb_header)
         if 'recombine-status' in metadata:
             self.status = metadata['recombine-status']
         metadata.update(self.analyze_comments())
