@@ -255,7 +255,7 @@ class Project(object):
                 patches_branch = self.underlayer.branch_maps['replica->patches'][branch]
                 self.scan_replica_patches(patches_branch=patches_branch)
             elif recomb_type == 'original-diversity' or recomb_type == "evolution-diversity":
-                return self.scan_original_distance(branch=branch)
+                return self.scan_original_distance(branch)
         else:
             for branch in self.original_branches:
                 patches_branch = self.underlayer.branch_maps['original->patches'][branch]
