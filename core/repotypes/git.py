@@ -8,7 +8,7 @@ import shutil
 import re
 from ..utils import *
 from shellcommand import shell
-from ..datastructures import Change, EvolutionDiversityRecombination, OriginalDiversityRecombination, ReplicaMutationRecombination
+from ..datastructures import Change, EvolutionDiversityRecombination, OriginalDiversityRecombination, ReplicaMutationRecombination, Recombination
 from gerrit import Gerrit
 from ..colorlog import log, logsummary
 from ..exceptions import RecombinationCanceledError, RecombinationFailed
