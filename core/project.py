@@ -307,7 +307,9 @@ class Project(object):
             for test_type in test_results[project_name]:
                 test_output = test_results[project_name][test_type]
                 if test_output is None:
-                    return (0, "missing test results")
+                    # We are accepting everything for now
+                    return (100, None)
+                    #return (0, "missing test results")
         return (100, None)
 
     def vote_recombinations(self, test_results, recomb_id=None):
@@ -336,7 +338,7 @@ class Project(object):
                 recombination.approve()
                 logsummary.info("Recombination %s Approved" % recomb_id)
             else:
-                recomb.reject()
+                recombination.reject()
                 logsummary.info("Recombination %s Rejected: %s" % (recomb_id, test_analysis))
 
     def delete_service_branches(self):
