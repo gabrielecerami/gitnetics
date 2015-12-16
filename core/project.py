@@ -349,7 +349,7 @@ class Project(object):
         recomb_active_branches = list()
         target_stale_branches = list()
         recomb_all_branches = self.underlayer.list_branches('replica', pattern='recomb*')
-        infos = self.replica_remote.query_changes_json('"status:open AND project:%s"' % self.replica_project['name'])
+        infos = self.underlayer.replica_remote.query_changes_json('"status:open AND project:%s"' % self.replica_project['name'])
         for info in infos:
             recomb_active_branches.append(info['branch'])
 
