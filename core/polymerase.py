@@ -126,8 +126,10 @@ class Polymerase(object):
     def janitor(self):
         for project_name in self.projects:
             project = self.projects[project_name]
+            log.info("Cleaning up %s replica repositories" % project_name)
+            log.info("Deleting service branches from mirror")
             project.delete_service_branches()
-            log.info("delete stale branches")
+            log.info("delete stale branches from replica")
             project.delete_stale_branches()
             # non-existing:
             # for branch in watched branches
