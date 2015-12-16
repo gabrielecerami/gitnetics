@@ -561,6 +561,7 @@ class Underlayer(Git):
 
     def get_recombination_by_id(self, recomb_id):
         recomb = Recombination(self, self.recomb_remote)
+        recomb.initialize(remote=self.recomb_remote)
         data = self.recomb_remote.get_change_data(recomb_id)
         metadata = recomb.load_change_data(data)
         recomb_type = metadata['recomb-type']
