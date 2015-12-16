@@ -250,7 +250,7 @@ class Project(object):
 
     def check_approved_recombinations(self, recomb_id=None):
         if recomb_id:
-            recomb_type, branch = self.underlayer.get_scaninfo_by_recombid(recomb_id)
+            recomb_type, branch = self.underlayer.get_scaninfo_by_recomb_id(recomb_id)
             if recomb_type == 'replica-mutation':
                 patches_branch = self.underlayer.branch_maps['replica->patches'][branch]
                 self.scan_replica_patches(patches_branch=patches_branch)
