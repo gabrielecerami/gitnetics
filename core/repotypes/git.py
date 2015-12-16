@@ -564,11 +564,11 @@ class Underlayer(Git):
         data = self.recomb_remote.get_change(recomb_id)
         metadata = recomb.load_change_data(data)
         recomb_type = metadata['recomb-type']
-        if recomb_type = "original-diversity":
+        if recomb_type == "original-diversity":
             recombination = OriginalDiversityRecombination(self, self.recomb_remote)
-        elif recomb_type = "replica-mutation":
+        elif recomb_type == "replica-mutation":
             recombination = OriginalDiversityRecombination(self, self.recomb_remote)
-        elif recomb_type = "evolution-diversity":
+        elif recomb_type == "evolution-diversity":
             recombination = OriginalDiversityRecombination(self, self.recomb_remote)
 
         recombination.load_change_data(data):
