@@ -250,12 +250,12 @@ class Project(object):
 
     def check_approved_recombinations(self, recomb_id=None):
         if recomb_id:
-            recomb_type, recombination = self.underlayer.get_recombination_by_id(recomb_id)
+            recomb_type, branch = self.underlayer.get_scaninfo_by_recombid(recomb_id)
             if recomb_type == 'replica-mutation':
-                patches_branch = self.underlayer.branch_maps['replica->patches'][recombination.replica_change.branch]
+                patches_branch = self.underlayer.branch_maps['replica->patches'][branch]
                 self.scan_replica_patches(patches_branch=patches_branch)
             elif recomb_type == 'original-diversity' or recomb_type == "evolution-diversity":
-                return self.scan_original_distance(branch=recombination.original_change.branch)
+                return self.scan_original_distance(branch=branch)
         else:
             for branch in self.original_branches:
                 patches_branch = self.underlayer.branch_maps['original->patches'][branch]

@@ -559,21 +559,14 @@ class Underlayer(Git):
             return recombination, mutation_changes
         return None, None
 
-    def get_recombination_by_id(self, recomb_id):
+    def get_scaninfo_by_recomb_id(self, recomb_id):
         recomb = Recombination(self, self.recomb_remote)
-        recomb.initialize(remote=self.recomb_remote)
         data = self.recomb_remote.get_change_data(recomb_id)
         metadata = recomb.load_change_data(data)
         recomb_type = metadata['recomb-type']
-        if recomb_type == "original-diversity":
-            recombination = OriginalDiversityRecombination(self, self.recomb_remote)
-        elif recomb_type == "replica-mutation":
-            recombination = OriginalDiversityRecombination(self, self.recomb_remote)
-        elif recomb_type == "evolution-diversity":
-            recombination = OriginalDiversityRecombination(self, self.recomb_remote)
+        branch = metadata['sources']['main']['branch']
 
-        recombination.load_change_data(data)
-        return recomb_type, recombination
+        return recomb_type, branch
 
     def get_backport_change():
         pass
