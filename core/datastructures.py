@@ -168,7 +168,7 @@ class Recombination(Change):
         except AttributeError:
             pass
         try:
-            commit_message_data['removed-patches-commits'] = self.removed_patches_commits)
+            commit_message_data['removed-patches-commits'] = self.removed_patches_commits
         except AttributeError:
             pass
         # metadata['sources']['patches']['commit-message']
