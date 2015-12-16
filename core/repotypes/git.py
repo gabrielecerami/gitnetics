@@ -571,7 +571,7 @@ class Underlayer(Git):
         elif recomb_type == "evolution-diversity":
             recombination = OriginalDiversityRecombination(self, self.recomb_remote)
 
-        recombination.load_change_data(data):
+        recombination.load_change_data(data)
         return recomb_type, recombination
 
     def get_backport_change():
