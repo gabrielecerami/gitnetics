@@ -31,6 +31,7 @@ class Git(object):
             shell('git init')
 
     def get_revision(self, ref):
+        os.chdir(self.directory)
         # works with both tags and branches
         cmd = shell('git rev-list -n 1 %s' % ref)
         revision = cmd.output[0].rstrip('\n')
@@ -83,6 +84,7 @@ class Git(object):
             shell('git push %s :%s' % (remote_name,branch))
 
     def get_commits(self, revision_start, revision_end, first_parent=True, reverse=True, no_merges=False):
+        os.chdir(self.directory)
         options = ''
         commit_list = list()
         log.debug("Interval: %s..%s" % (revision_start, revision_end))
@@ -503,7 +505,7 @@ class Underlayer(Git):
         return dirlist
 
     def get_patches_changes(self, patches_branch):
-        return self.patches_remote.get_changes(patches_branch, search_field='branch', branch=patches_branch)
+        return self.patches_remote.get_changes(patches_branch, search_field='branch', branch=patches_branch, search_merged=False)
 
     def get_original_ids(self, commits):
         ids = OrderedDict()
@@ -684,7 +686,7 @@ class TrackedRepo(Git):
 
         return change_data
 
-    def get_changes(self, search_values, search_field='commit', results_key='revision', branch=None):
+    def get_changes(self, search_values, search_field='commit', results_key='revision', branch=None, search_merged=True):
         changes_data = self.get_changes_data(search_values, search_field=search_field, results_key=results_key, branch=branch)
 
         changes = OrderedDict()

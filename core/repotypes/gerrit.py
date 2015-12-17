@@ -88,12 +88,14 @@ class Gerrit(object):
 
         cmd = shell("echo '%s' | ssh %s gerrit review --json %s,%s" % (json_input, self.host, number, patchset))
 
-    def get_query_string(self, criteria, ids, branch=None):
+    def get_query_string(self, criteria, ids, branch=None, search_merged=True):
         query_string = '\(%s:%s' % (criteria, ids[0])
         for change in ids[1:]:
             query_string = query_string + " OR %s:%s" % (criteria,change)
 #        uncomment this below and remove the if else block
         query_string = query_string + "\) AND project:%s AND NOT status:abandoned" % (self.project_name)
+        if not search_merged:
+            query_string = query_string + " AND NOT status:merged"
 #        if self.name == 'original':
 #            query_string = query_string + "\) AND project:openstack/nova AND NOT status:abandoned"
 #        elif criteria == "commit":
@@ -146,11 +148,11 @@ class Gerrit(object):
 
         return infos
 
-    def get_changes_data(self, search_values, search_field='change', results_key='id', branch=None, sort_key='number'):
+    def get_changes_data(self, search_values, search_field='change', results_key='id', branch=None, sort_key='number', search_merged=True):
         if type(search_values) is str or type(search_values) is unicode:
             search_values = [search_values]
 
-        query_string = self.get_query_string(search_field, search_values, branch=branch)
+        query_string = self.get_query_string(search_field, search_values, branch=branch, search_merged=search_merged)
         changes_data = self.query_changes_json(query_string)
 
         changes_data.sort(key=lambda data: data[sort_key])
@@ -179,8 +181,8 @@ class Gerrit(object):
 
         return change_data
 
-    def get_changes(self, search_values, search_field='change', results_key='id', branch=None):
-        change_data = self.get_changes_data(search_values, search_field=search_field, results_key=results_key, branch=branch)
+    def get_changes(self, search_values, search_field='change', results_key='id', branch=None, search_merged=True):
+        change_data = self.get_changes_data(search_values, search_field=search_field, results_key=results_key, branch=branch, search_merged=search_merged)
 
         changes = OrderedDict()
         for key in change_data:
