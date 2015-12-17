@@ -239,9 +239,9 @@ class Project(object):
         for patches_branch in patches_branches:
             recombination, remaining_changes = self.underlayer.get_recombination_from_patches(patches_branch)
             # TODO: handle new patchset on same branch-patches review.
-            recomb = recombination.__dict__
-            log.debugvar('recomb')
             if recombination:
+                recomb = recombination.__dict__
+                log.debugvar('recomb')
                 recombination.handle_status()
                 if remaining_changes:
                     log.warning("Remaining mutation changes %s will be handled in order one at a time after recombination %s is completed " % (' '.join(remaining_changes), recombination.uuid))
