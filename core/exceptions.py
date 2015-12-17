@@ -41,5 +41,5 @@ class RecombinationDataExpired(Exception):
 class RecombinationCanceledError(Exception):
     pass
 
-class RemoteFetchError(Exception):
+class ConstrainViolationError(Exception):
     pass
