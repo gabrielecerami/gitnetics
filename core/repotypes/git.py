@@ -503,7 +503,7 @@ class Underlayer(Git):
         return dirlist
 
     def get_patches_changes(self, patches_branch):
-        return self.patches_remote.get_changes(patches_branch, search_field='branch', branch=patches_branch)
+        return self.patches_remote.get_changes(patches_branch, search_field='branch', branch=patches_branch, search_merged=False)
 
     def get_original_ids(self, commits):
         ids = OrderedDict()
@@ -684,7 +684,7 @@ class TrackedRepo(Git):
 
         return change_data
 
-    def get_changes(self, search_values, search_field='commit', results_key='revision', branch=None):
+    def get_changes(self, search_values, search_field='commit', results_key='revision', branch=None, search_merged=True):
         changes_data = self.get_changes_data(search_values, search_field=search_field, results_key=results_key, branch=branch)
 
         changes = OrderedDict()
