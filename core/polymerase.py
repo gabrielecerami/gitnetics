@@ -83,12 +83,18 @@ class Polymerase(object):
         return success
 
     def poll_replica(self, patches_branch=None):
-        success = True
-        for project_name in self.projects:
-            project=self.projects[project_name]
-            if not project.scan_replica_patches(patches_branch=patches_branch):
-                success = False
-        return success
+        try:
+            log.info("Scanning upstream repos for changes")
+            success = True
+            for project_name in self.projects:
+                project=self.projects[project_name]
+                if not project.scan_replica_patches(patches_branch=patches_branch):
+                    success = False
+            return success
+        except Exception, e:
+            traceback.print_exc(file=sys.stdout)
+            log.error(e)
+            logsummary.error("Project %s skipped, reason: %s" % (project_name, e))
 
     def prepare_tests(self, tests_basedir, recomb_id=None):
         logsummary.info('Fetching untested recombinations')
