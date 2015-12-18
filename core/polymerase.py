@@ -71,30 +71,26 @@ class Polymerase(object):
 
     def poll_original(self):
         logsummary.info('Polling original for new changes. Checking status of all changes.')
-        success = True
         for project_name in self.projects:
-            logsummary.info('Project: %s' % project_name)
-            project = self.projects[project_name]
-            #try:
-            #    project.poll_original_branches()
-            project.poll_original_branches()
-            #except Exception, e:
-            #   logsummary.info("Problem with project %s: %s. Skipping" % (project_name, e))
-        return success
+            try:
+                logsummary.info('Polling project: %s' % project_name)
+                project = self.projects[project_name]
+                project.poll_original_branches()
+            except Exception, e:
+                traceback.print_exc(file=sys.stdout)
+                log.error(e)
+                logsummary.error("Project %s skipped, reason: %s" % (project_name, e))
 
     def poll_replica(self, patches_branch=None):
-        try:
-            log.info("Scanning upstream repos for changes")
-            success = True
-            for project_name in self.projects:
+        log.info("Scanning replica repos for new patches")
+        for project_name in self.projects:
+            try:
                 project=self.projects[project_name]
-                if not project.scan_replica_patches(patches_branch=patches_branch):
-                    success = False
-            return success
-        except Exception, e:
-            traceback.print_exc(file=sys.stdout)
-            log.error(e)
-            logsummary.error("Project %s skipped, reason: %s" % (project_name, e))
+                project.scan_replica_patches(patches_branch=patches_branch)
+            except Exception, e:
+                traceback.print_exc(file=sys.stdout)
+                log.error(e)
+                logsummary.error("Project %s skipped, reason: %s" % (project_name, e))
 
     def prepare_tests(self, tests_basedir, recomb_id=None):
         logsummary.info('Fetching untested recombinations')
