@@ -120,10 +120,16 @@ class Polymerase(object):
                     project.vote_recombinations(project_test_results)
 
     def check_approved_recombinations(self, recomb_id=None):
+        log.info("Checking for approved recombinations to handle")
         for project_name in self.projects:
-            log.info("Checking project '%s'" % project_name)
-            project = self.projects[project_name]
-            project.check_approved_recombinations(recomb_id=recomb_id)
+            try:
+                log.info("Checking project '%s'" % project_name)
+                project = self.projects[project_name]
+                project.check_approved_recombinations(recomb_id=recomb_id)
+            except Exception, e:
+                traceback.print_exc(file=sys.stdout)
+                log.error(e)
+                logsummary.error("Project %s skipped, reason: %s" % (project_name, e))
 
     def janitor(self):
         for project_name in self.projects:
