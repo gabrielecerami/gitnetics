@@ -31,6 +31,7 @@ class Git(object):
             shell('git init')
 
     def get_revision(self, ref):
+        os.chdir(self.directory)
         # works with both tags and branches
         cmd = shell('git rev-list -n 1 %s' % ref)
         revision = cmd.output[0].rstrip('\n')
@@ -83,6 +84,7 @@ class Git(object):
             shell('git push %s :%s' % (remote_name,branch))
 
     def get_commits(self, revision_start, revision_end, first_parent=True, reverse=True, no_merges=False):
+        os.chdir(self.directory)
         options = ''
         commit_list = list()
         log.debug("Interval: %s..%s" % (revision_start, revision_end))
